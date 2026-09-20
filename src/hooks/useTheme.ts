@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 export type Theme = 'light' | 'dark';
 
-const STORAGE_KEY = 'arsiv-theme';
+const STORAGE_KEY = 'asil-converter-theme';
 
 function readInitialTheme(): Theme {
   try {

@@ -1,4 +1,16 @@
-# Arşiv — video ve MP3 indirici (ön yüz)
+```
+ █████╗ ███████╗██╗██╗
+██╔══██╗██╔════╝██║██║
+███████║███████╗██║██║
+██╔══██║╚════██║██║██║
+██║  ██║███████║██║███████╗
+╚═╝  ╚═╝╚══════╝╚═╝╚══════╝
+   P E R S O N A L  ·  C O N V E R T E R
+```
+
+# Asil Personal-Converter
+
+**Bağlantıyı yapıştır, MP4 ya da MP3 olarak indir.** Kişisel dönüştürücü arayüzü.
 
 React + TypeScript + Vite + Tailwind CSS v4. Tasarım tuvalindeki dört artboard'un
 çalışan karşılığı: açık/koyu tema, MP4/MP3 sekmesi, kalite seçimi, altyazı ve
@@ -29,7 +41,8 @@ src/
     useTheme.ts           açık/koyu tema, localStorage'da hatırlanır
     useClipboardPaste.ts  panodan yapıştırma
   components/
-    Header.tsx  ThemeToggle.tsx  UrlInput.tsx  ErrorNote.tsx
+    Logo.tsx    Header.tsx  ThemeToggle.tsx  UrlInput.tsx
+    ErrorNote.tsx
     MediaPreview.tsx  FormatTabs.tsx  QualityList.tsx
     OptionToggles.tsx  DownloadButton.tsx
     EmptyState.tsx  SourceCards.tsx  Footer.tsx  Icons.tsx

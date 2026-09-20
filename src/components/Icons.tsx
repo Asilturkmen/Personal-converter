@@ -93,6 +93,15 @@ export function ArrowRightIcon({ className = 'h-[17px] w-[17px]' }: IconProps) {
   );
 }
 
+export function ArrowUpRightIcon({ className = 'h-[13px] w-[13px]' }: IconProps) {
+  return (
+    <svg className={base + ' ' + className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M7 17 17 7" />
+      <path d="M8.5 7H17v8.5" />
+    </svg>
+  );
+}
+
 export function VerticalVideoIcon({ className = 'h-[18px] w-[18px]' }: IconProps) {
   return (
     <svg className={base + ' ' + className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

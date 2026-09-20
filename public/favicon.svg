@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="7.4 0.5 33.2 46.8" fill="none">
+  <style>
+    .link { stroke: #17171a }
+    @media (prefers-color-scheme: dark) { .link { stroke: #f2f2f5 } }
+  </style>
+  <defs>
+    <clipPath id="ct"><rect x="0" y="0" width="48" height="24"/></clipPath>
+    <clipPath id="cb"><rect x="0" y="24" width="48" height="24"/></clipPath>
+    <mask id="ma" maskUnits="userSpaceOnUse" x="-8" y="-8" width="64" height="64">
+      <rect x="-8" y="-8" width="64" height="64" fill="#fff"/>
+      <g clip-path="url(#cb)"><rect x="18.9" y="19.4" width="18.75" height="9.25" rx="4.63" fill="none" stroke="#000" stroke-width="8.15"/></g>
+    </mask>
+    <mask id="mb" maskUnits="userSpaceOnUse" x="-8" y="-8" width="64" height="64">
+      <rect x="-8" y="-8" width="64" height="64" fill="#fff"/>
+      <g clip-path="url(#ct)"><rect x="10.3" y="19.4" width="18.75" height="9.25" rx="4.63" fill="none" stroke="#000" stroke-width="8.15"/></g>
+    </mask>
+    <mask id="mar" maskUnits="userSpaceOnUse" x="-8" y="-8" width="64" height="64">
+      <rect x="-8" y="-8" width="64" height="64" fill="#fff"/>
+      <g transform="translate(0 -7) rotate(-45 24 24)" stroke="#000" stroke-width="6.8" fill="none">
+        <rect x="10.3" y="19.4" width="18.75" height="9.25" rx="4.63"/>
+        <rect x="18.9" y="19.4" width="18.75" height="9.25" rx="4.63"/>
+      </g>
+    </mask>
+  </defs>
+
+  <path d="M21 24h6v12h5.5L24 46l-8.5-10H21z" mask="url(#mar)" fill="#2f6be0" stroke="#2f6be0" stroke-width="1.4" stroke-linejoin="round"/>
+
+  <g transform="translate(0 -7) rotate(-45 24 24)" class="link" stroke-width="4.35" fill="none">
+    <rect x="10.3" y="19.4" width="18.75" height="9.25" rx="4.63" mask="url(#ma)"/>
+    <rect x="18.9" y="19.4" width="18.75" height="9.25" rx="4.63" mask="url(#mb)"/>
+  </g>
+</svg>
