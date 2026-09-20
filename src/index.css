@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+/* Koyu tema <html class="dark"> ile açılır. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+  TASARIM TOKENLARI
+  Buradaki her değişken bir Tailwind yardımcı sınıfına dönüşür:
+  --color-surface  ->  bg-surface / text-surface / border-surface
+  --radius-card    ->  rounded-card
+  --shadow-soft    ->  shadow-soft
+  Rengi değiştirmek için tek yer burası.
+*/
+@theme {
+  --font-sans: "Manrope", ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  --color-canvas: #f4f3ef;
+  --color-header: #fbfaf8;
+  --color-surface: #ffffff;
+  --color-surface-2: #f1efea;
+  --color-line: #e5e3dd;
+  --color-line-soft: #eeece7;
+  --color-chip: #f1efea;
+  --color-ink: #17171a;
+  --color-muted: #6b6b73;
+  --color-thumb: #e8e6e0;
+  --color-thumb-ink: #77777f;
+  --color-pick: #f2f6fe;
+  --color-accent: #2f6be0;
+  --color-accent-strong: #1f53bc;
+
+  --radius-card: 18px;
+  --radius-control: 12px;
+
+  --shadow-soft: 0 1px 2px rgba(20, 20, 20, 0.04), 0 10px 26px rgba(20, 20, 20, 0.05);
+  --shadow-tab: 0 1px 2px rgba(20, 20, 20, 0.06), 0 4px 10px rgba(20, 20, 20, 0.05);
+}
+
+/* Aynı tokenlar, koyu temadaki değerleriyle. */
+.dark {
+  --color-canvas: #0c0c0e;
+  --color-header: #101013;
+  --color-surface: #16161a;
+  --color-surface-2: #1e1e23;
+  --color-line: #2a2a31;
+  --color-line-soft: #232329;
+  --color-chip: #232329;
+  --color-ink: #f2f2f5;
+  --color-muted: #9c9ca6;
+  --color-thumb: #1e1e23;
+  --color-thumb-ink: #8a8a94;
+  --color-pick: #1d2432;
+
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.5), 0 12px 30px rgba(0, 0, 0, 0.35);
+  --shadow-tab: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-canvas text-ink font-sans antialiased;
+  }
+
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+}
