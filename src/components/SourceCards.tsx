@@ -13,7 +13,7 @@ export default function SourceCards() {
       {cards.map((card) => (
         <div
           key={card.title}
-          className="flex min-h-[clamp(108px,10.15vh,132px)] flex-col justify-between rounded-card border border-line bg-surface px-5 py-v20"
+          className="flex min-h-[var(--h-card)] flex-col justify-between rounded-card border border-line bg-surface px-5 py-v20"
         >
           <span className="flex h-[34px] w-[34px] items-center justify-center rounded-[11px] bg-surface-2 text-ink">
             {card.icon}

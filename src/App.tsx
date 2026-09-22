@@ -99,8 +99,8 @@ export default function App() {
     <div className="flex min-h-dvh flex-col">
       <Header theme={theme} onToggleTheme={toggle} />
 
-      <main className="mx-auto w-full max-w-[1120px] grow px-5 pt-v32 md:px-10 md:pt-v44">
-        <h1 className="text-[clamp(30px,3.08vh,40px)] font-extrabold leading-[1.1] tracking-[-0.03em]">
+      <main className="mx-auto w-full max-w-[1120px] grow px-5 pt-v32 md:px-10 md:pt-v40">
+        <h1 className="text-[length:var(--t-title)] font-extrabold leading-[1.1] tracking-[-0.03em]">
           Bağlantıyı yapıştır.
         </h1>
         <p className="mt-v12 max-w-[640px] text-[15px] font-medium leading-relaxed text-muted md:text-base">
@@ -114,7 +114,7 @@ export default function App() {
         {error && <ErrorNote message={error} />}
 
         {info ? (
-          <div className="mt-v32 grid grid-cols-1 gap-v32 md:grid-cols-[clamp(340px,33.85vh,440px)_1fr] md:gap-v40">
+          <div className="mt-v32 grid grid-cols-1 gap-v32 md:grid-cols-[var(--w-preview)_1fr] md:gap-v40">
             <MediaPreview info={info} />
 
             <div className="min-w-0">
@@ -145,9 +145,16 @@ export default function App() {
             <SourceCards />
           </>
         )}
-
-        <Footer />
       </main>
+
+      {/*
+        Footer main'in dışında duruyor. main `grow` olduğu için artan boşluk
+        main'e gider ve footer sayfanın dibine yapışır — boşluk footer'ın
+        altında değil üstünde kalır. İçerik uzunsa normal akışına döner.
+      */}
+      <div className="mx-auto w-full max-w-[1120px] px-5 md:px-10">
+        <Footer />
+      </div>
     </div>
   );
 }

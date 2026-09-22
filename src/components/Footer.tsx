@@ -2,7 +2,7 @@ import { ArrowUpRightIcon } from './Icons';
 
 export default function Footer() {
   return (
-    <footer className="mt-v40 flex items-center justify-center border-t border-line-soft py-v20">
+    <footer className="mt-v32 flex items-center justify-center border-t border-line-soft py-v18">
       <p className="text-[12.5px] font-medium text-muted">
         <a
           href="https://asilturkmen.com"

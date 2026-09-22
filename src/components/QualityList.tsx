@@ -25,7 +25,7 @@ export default function QualityList({ options, selectedId, onSelect, legend }: P
             <label
               key={option.id}
               className={
-                'flex h-[clamp(48px,4.62vh,60px)] cursor-pointer items-center justify-between px-[18px] transition-colors focus-within:outline-2 focus-within:outline-offset-[-2px] focus-within:outline-accent ' +
+                'flex h-[var(--h-row)] cursor-pointer items-center justify-between px-[18px] transition-colors focus-within:outline-2 focus-within:outline-offset-[-2px] focus-within:outline-accent ' +
                 (last ? '' : 'border-b border-line-soft ') +
                 (selected ? 'bg-pick' : 'hover:bg-surface-2')
               }

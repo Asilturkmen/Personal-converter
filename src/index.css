@@ -74,36 +74,60 @@
 }
 
 /*
-  DİKEY RİTİM  (yükseklik-duyarlı boşluk ölçeği)
+  EKRAN YÜKSEKLİĞİNE UYUM
 
-  Tasarımın doğal yüksekliği ~1050px. 27" bir monitörde bu sığar; laptopta
-  (~930px) ve MacBook'ta (~760px) sığmaz. Çözüm sayfayı küçültmek DEĞİL —
-  o zaman yazılar okunmaz hale gelir. Bunun yerine yerin çoğunu yiyen şeyi,
-  yani boşlukları ve dekoratif blok yüksekliklerini ekran boyuna göre
-  daraltıyoruz; tipografi okunabilir kalır.
+  Tek bir ilerleme değeri her şeyi sürüyor:
 
-      clamp(taban, ölçek, tavan)
-              |      |      └── 27" ekrandaki değer (bugünkü tasarım aynen)
-              |      └───────── 1vh = ekran yüksekliğinin %1'i
-              └──────────────── kısa ekranda inilebilecek en düşük değer
+      --fit = 0px  →  760px viewport (MacBook)    : her ölçü tabanında
+      --fit = 1px  →  920px viewport ve üzeri     : her ölçü tavanında
 
-  Ölçek katsayıları tavan/13 seçildi: 1300px ekran yüksekliğinde tavana
-  oturur, yani büyük monitörde hiçbir şey değişmez.
+  Aradaki her yükseklikte doğrusal olarak geçiş yapar. Ölçüler
+  `calc(taban + fark * var(--fit))` kalıbıyla türetiliyor; sağdaki yorum
+  her zaman "taban → tavan" aralığını gösterir.
 
-  dvh değil vh kullanıyoruz: mobilde adres çubuğu gizlenince dvh değişir ve
-  sayfa kaydırma sırasında zıplar.
+  Neden iki nokta arası? Tek bir `Xvh` katsayısı sıfırdan geçen bir doğru
+  demek: 920'de doğru değeri verdiğinde 760'ta fazla büyük, 760'ta doğru
+  olduğunda 920'de fazla küçük kalıyor. İki uç ayrı ayrı ayarlanabilmeli.
 
-  Kullanımı: mt-8 → mt-v32, py-5 → py-v20. Sayı, 27"deki px karşılığıdır.
+  Tavan 920'de: 1080p bir ekranda tarayıcı çubuklarından sonra ~925px
+  viewport kalıyor ve sayfa tam oturuyor. Daha büyük monitörde fazla alan
+  footer'ın üstünde toplanır (footer main'in dışında, sayfanın dibinde).
+
+  dvh değil vh: mobilde adres çubuğu gizlenince dvh değişir ve sayfa zıplar.
+
+  AYAR: soldaki sayı kısa ekranı, sağdaki büyük ekranı belirler. Başka
+  hiçbir dosyaya dokunmaya gerek yok.
+*/
+:root {
+  --fit: clamp(0px, calc((100vh - 760px) / 160), 1px);
+
+  /* sabit yükseklikli bloklar                       taban → tavan */
+  --h-header:  calc(64px  + 32  * var(--fit));   /*  64 →  96 */
+  --h-logo:    calc(34px  + 20  * var(--fit));   /*  34 →  54 */
+  --h-empty:   calc(250px + 80  * var(--fit));   /* 250 → 330 */
+  --p-empty:   calc(16px  + 28  * var(--fit));   /*  16 →  44 */
+  --h-card:    calc(108px + 24  * var(--fit));   /* 108 → 132 */
+  --h-row:     calc(48px  + 8   * var(--fit));   /*  48 →  56 */
+  --h-action:  calc(48px  + 8   * var(--fit));   /*  48 →  56 */
+  --w-preview: calc(340px + 100 * var(--fit));   /* 340 → 440 */
+
+  /* tipografi — yalnızca başlıklar, gövde metni hiç küçülmez */
+  --t-title:   calc(30px  + 10  * var(--fit));   /*  30 →  40 */
+  --t-logo:    calc(30px  + 6   * var(--fit));   /*  30 →  36 */
+}
+
+/*
+  Dikey ritim. Kullanımı: mt-8 → mt-v32, py-5 → py-v20.
+  Sayı, büyük ekrandaki px karşılığıdır.
 */
 @theme {
-  --spacing-v10: clamp(8px, 0.77vh, 10px);
-  --spacing-v12: clamp(8px, 0.92vh, 12px);
-  --spacing-v14: clamp(10px, 1.08vh, 14px);
-  --spacing-v16: clamp(10px, 1.23vh, 16px);
-  --spacing-v18: clamp(12px, 1.38vh, 18px);
-  --spacing-v20: clamp(12px, 1.54vh, 20px);
-  --spacing-v24: clamp(14px, 1.85vh, 24px);
-  --spacing-v32: clamp(18px, 2.46vh, 32px);
-  --spacing-v40: clamp(22px, 3.08vh, 40px);
-  --spacing-v44: clamp(24px, 3.38vh, 44px);
+  --spacing-v10: calc(8px  + 2  * var(--fit));
+  --spacing-v12: calc(8px  + 4  * var(--fit));
+  --spacing-v14: calc(10px + 4  * var(--fit));
+  --spacing-v16: calc(10px + 6  * var(--fit));
+  --spacing-v18: calc(12px + 6  * var(--fit));
+  --spacing-v20: calc(12px + 8  * var(--fit));
+  --spacing-v24: calc(14px + 10 * var(--fit));
+  --spacing-v32: calc(18px + 14 * var(--fit));
+  --spacing-v40: calc(22px + 18 * var(--fit));
 }

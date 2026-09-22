@@ -14,14 +14,14 @@ const ARROW = 'M21 24h6v12h5.5L24 46l-8.5-10H21z';
  * Halkaların geçme yerlerindeki boşluklar maske ile açılıyor — arka plan
  * rengine bağlı değil, her zeminde temiz durur.
  */
-export function LogoMark({ className = 'h-[48px] w-[34px]' }: { className?: string }) {
+export function LogoMark({ className = 'h-[48px]' }: { className?: string }) {
   const uid = useId().replace(/:/g, '');
   const [mA, mB, mArrow, clipTop, clipBottom] = [
     `${uid}-a`, `${uid}-b`, `${uid}-ar`, `${uid}-ct`, `${uid}-cb`,
   ];
 
   return (
-    <svg viewBox="7.4 0.5 33.2 46.8" className={'shrink-0 ' + className} fill="none" aria-hidden="true">
+    <svg viewBox="7.4 0.5 33.2 46.8" className={'aspect-[332/468] w-auto shrink-0 ' + className} fill="none" aria-hidden="true">
       <defs>
         <clipPath id={clipTop}><rect x="0" y="0" width="48" height="24" /></clipPath>
         <clipPath id={clipBottom}><rect x="0" y="24" width="48" height="24" /></clipPath>
@@ -73,19 +73,35 @@ function rectProps({ x, y, w, h, r }: { x: number; y: number; w: number; h: numb
 
 /**
  * KİLİT (amblem + kelime markası)
- * Amblem dikey olduğu için yazı da iki katlı: üstte kalın "Asil", altında
- * aralıklı büyük harflerle tanım satırı. Ortadaki nokta, amblemdeki okla
- * aynı accent rengini taşıyor — iki parçayı birbirine bağlayan tek detay bu.
- * Büyük harfler CSS `uppercase` yerine doğrudan yazıldı: lang="tr" altında
- * text-transform "i" harfini "İ" yapar.
+ * Yatay tek satır: amblem, "Asil", ince ayraç, tanım satırı. Header yatay bir
+ * bant olduğu için kilit de yatay — böylece 64px'e inen kısa ekran header'ında
+ * bile sıkışmıyor. (Önceki iki katlı dizilişte tanım satırı kelime markasından
+ * üç kat genişti ve kilidi dengesiz gösteriyordu.)
+ *
+ * Amblem yüksekliği header ile aynı oranda daralıyor: 96px'lik header'da
+ * 54px, 64px'lik header'da 34px. Genişlik viewBox oranından kendiliğinden geliyor (bkz. aspect-*).
+ * Kelime markası 36px'in altına 30px'ten fazla inmiyor — okunabilirlik önce.
+ *
+ * Tanım satırı yalnızca sm ve üzerinde görünür; telefonda amblem + "Asil"
+ * kalır, header'ın sağındaki "kişisel indirme aracı" zaten aynı işi görür.
+ *
+ * Ortadaki nokta, amblemdeki okla aynı accent rengini taşıyor — iki parçayı
+ * birbirine bağlayan tek detay bu. Büyük harfler CSS `uppercase` yerine
+ * doğrudan yazıldı: lang="tr" altında text-transform "i" harfini "İ" yapar.
  */
 export default function Logo({ className = '' }: { className?: string }) {
   return (
     <span className={'flex items-center gap-[14px] text-ink ' + className}>
-      <LogoMark className="h-[52px] w-[37px] md:h-[60px] md:w-[43px]" />
-      <span className="flex flex-col">
-        <span className="text-[30px] font-extrabold leading-none tracking-[-0.035em] md:text-[36px]">Asil</span>
-        <span className="mt-[7px] text-[9.5px] font-bold leading-none tracking-[0.24em] text-muted md:text-[10.5px]">
+      <LogoMark className="h-[52px] md:h-[var(--h-logo)]" />
+
+      <span className="flex items-center gap-[14px]">
+        <span className="text-[30px] font-extrabold leading-none tracking-[-0.035em] md:text-[length:var(--t-logo)]">
+          Asil
+        </span>
+
+        <span aria-hidden="true" className="hidden h-[24px] w-px bg-line sm:block" />
+
+        <span className="hidden text-[10.5px] font-bold leading-none tracking-[0.24em] text-muted sm:block">
           PERSONAL<span className="mx-[0.55em] text-accent">·</span>CONVERTER
         </span>
       </span>

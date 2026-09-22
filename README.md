@@ -50,39 +50,49 @@ src/
 
 ## Ekran yüksekliğine uyum
 
-Tasarımın doğal yüksekliği ~1050 px. 27" bir monitörde bu zaten sığıyor, ama
-laptop (~930 px) ve MacBook (~760 px) ekranlarında taşıyordu.
+Tasarımın doğal yüksekliği ~1000 px. 1080p bir ekranda tarayıcı çubuklarından
+sonra **925 px** viewport kalıyor, bir MacBook'ta ~760 px. Sabit px ölçülerle
+ikisinde birden oturmuyordu.
 
-Çözüm sayfayı küçültmek **değil** — o zaman gövde metni 11 px'e düşer ve
-okunmaz. Bunun yerine yerin çoğunu tüketen şey daraltılıyor: boşluklar ve
-dekoratif blok yükseklikleri. Tipografi ve dokunma hedefleri sabit kalır.
+Çözüm sayfayı `zoom` ile küçültmek **değil** — o zaman gövde metni 11 px'e
+iner ve okunmaz. Bunun yerine yerin çoğunu tüketen şey daraltılıyor: boşluklar
+ve dekoratif blok yükseklikleri. Gövde metni, etiketler ve dokunma hedefleri
+hiçbir boyutta küçülmez.
 
-`src/index.css` içindeki `--spacing-v*` ölçeği bunu yapar:
+`src/index.css` içinde tek bir ilerleme değeri her şeyi sürüyor:
 
 ```css
---spacing-v32: clamp(18px, 2.46vh, 32px);   /*  mt-8  -> mt-v32  */
---spacing-v40: clamp(22px, 3.08vh, 40px);   /*  mt-10 -> mt-v40  */
+--fit: clamp(0px, calc((100vh - 760px) / 160), 1px);
+/*  0px = 760 px viewport (tabanlar)   ·   1px = 920 px ve üzeri (tavanlar)  */
+
+--h-empty: calc(250px + 80 * var(--fit));   /* 250 → 330 */
+--spacing-v32: calc(18px + 14 * var(--fit));   /* mt-8 → mt-v32 */
 ```
 
-Ölçek katsayıları `tavan / 13` seçildi; yani 1300 px ekran yüksekliğinde hepsi
-tavana oturur ve **büyük monitörde hiçbir şey değişmez.** Aynı mantık sabit
-yükseklikli bloklara da uygulandı:
+Tek bir `Xvh` katsayısı yerine iki nokta arası geçiş kullanılıyor: `Xvh`
+sıfırdan geçen bir doğru demek, yani bir uçta doğru olduğunda öteki uçta
+şaşıyor. Burada kısa ekran ve büyük ekran ayrı ayrı ayarlanabiliyor.
 
-| | 27" (1340 px) | laptop (930 px) | MacBook (760 px) |
-|---|---|---|---|
-| header | 108 | 77 | 64 |
-| boş durum kutusu | 400 | 286 | 234 |
-| kalite satırı | 60 | 48 | 48 |
-| başlık (h1) | 40 | 30 | 30 |
-| gövde metni | 16 | 16 | 16 |
-| **toplam sayfa** | **~1050** | **~817** | **~772** |
+| | 1080p (925 px) | MacBook (760 px) |
+|---|---|---|
+| header | 96 | 64 |
+| boş durum kutusu | 330 | 250 |
+| kalite satırı | 56 | 48 |
+| başlık (h1) | 40 | 30 |
+| gövde metni | 16 | 16 |
+| **boş ekran toplamı** | **905** | **676** |
 
-Sonuç: 930 px ve üzerinde kaydırma yok; 760 px'te yalnızca 5 kalite seçenekli
-YouTube videosunda ~10 px kaydırma kalıyor. Metin hiçbir boyutta küçülmüyor.
+Footer `main`'in dışında duruyor ve `main` `grow` aldığı için sayfanın dibine
+yapışır. Artan boşluk böylece footer'ın altında değil üstünde toplanır —
+büyük monitörde sayfa yarım kalmış gibi görünmez.
 
-Ayarlamak istersen tek yer `src/index.css` sonundaki `@theme` bloğu: tavanı
-değiştirmek 27"deki görünümü, tabanı değiştirmek kısa ekranlardaki sıkılığı
-belirler.
+Kaydırma durumu: boş ekranda hiçbir boyutta yok. Bağlantı getirildikten sonra
+5 kalite seçenekli YouTube videosunda 925 px'te ~34 px kalıyor; Instagram ve
+MP3 listelerinde yok.
+
+**Ayar:** her şey `src/index.css` başındaki `:root` bloğunda. Soldaki sayı
+kısa ekranı, sağdaki büyük ekranı belirler; `160` ise geçişin tamamlandığı
+yüksekliği (760 + 160 = 920 px). Başka dosyaya dokunmaya gerek yok.
 
 ## Renkleri değiştirmek
 

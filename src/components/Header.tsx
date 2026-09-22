@@ -10,7 +10,7 @@ interface Props {
 export default function Header({ theme, onToggleTheme }: Props) {
   return (
     <header className="border-b border-line-soft bg-header">
-      <div className="mx-auto flex h-[88px] max-w-[1120px] items-center justify-between px-5 md:h-[clamp(64px,8.31vh,108px)] md:px-10">
+      <div className="mx-auto flex h-[88px] max-w-[1120px] items-center justify-between px-5 md:h-[var(--h-header)] md:px-10">
         <Logo />
 
         <div className="flex items-center gap-3.5">
