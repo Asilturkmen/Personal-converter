@@ -29,9 +29,9 @@ export default function MediaPreview({ info }: Props) {
         </span>
       </div>
 
-      <h2 className="mt-4 text-[19px] font-bold leading-snug tracking-[-0.01em]">{info.title}</h2>
+      <h2 className="mt-v16 text-[19px] font-bold leading-snug tracking-[-0.01em]">{info.title}</h2>
 
-      <div className="mt-2.5 flex items-center gap-2.5">
+      <div className="mt-v10 flex items-center gap-2.5">
         <span className="h-[22px] w-[22px] shrink-0 rounded-full bg-chip" />
         <span className="text-sm font-semibold">{info.author}</span>
         <span className="text-sm text-muted">·</span>
@@ -40,7 +40,7 @@ export default function MediaPreview({ info }: Props) {
 
       <button
         type="button"
-        className="mt-4 flex h-[46px] w-full items-center justify-center gap-2.5 rounded-[13px] border border-line bg-surface text-sm font-semibold text-ink transition-colors hover:bg-surface-2"
+        className="mt-v16 flex h-[46px] w-full items-center justify-center gap-2.5 rounded-[13px] border border-line bg-surface text-sm font-semibold text-ink transition-colors hover:bg-surface-2"
       >
         <ImageIcon />
         Kapak görselini indir

@@ -2,7 +2,7 @@ import { VideoIcon } from './Icons';
 
 export default function EmptyState() {
   return (
-    <div className="mt-8 flex min-h-[280px] flex-col items-center justify-center gap-4.5 rounded-[22px] border border-dashed border-line bg-surface/60 px-6 py-12 md:min-h-[400px]">
+    <div className="mt-v32 flex min-h-[280px] flex-col items-center justify-center gap-v18 rounded-[22px] border border-dashed border-line bg-surface/60 px-6 py-[clamp(20px,3.69vh,48px)] md:min-h-[clamp(200px,30.77vh,400px)]">
       <span className="flex h-[74px] w-[74px] items-center justify-center rounded-[22px] border border-line bg-surface text-muted">
         <VideoIcon className="h-[30px] w-[30px]" />
       </span>

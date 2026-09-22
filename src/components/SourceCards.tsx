@@ -9,16 +9,16 @@ const cards: { icon: ReactNode; title: string; body: string }[] = [
 
 export default function SourceCards() {
   return (
-    <div className="mt-6 grid grid-cols-1 gap-4.5 sm:grid-cols-3">
+    <div className="mt-v24 grid grid-cols-1 gap-v18 sm:grid-cols-3">
       {cards.map((card) => (
         <div
           key={card.title}
-          className="flex min-h-[132px] flex-col justify-between rounded-card border border-line bg-surface p-5"
+          className="flex min-h-[clamp(108px,10.15vh,132px)] flex-col justify-between rounded-card border border-line bg-surface px-5 py-v20"
         >
           <span className="flex h-[34px] w-[34px] items-center justify-center rounded-[11px] bg-surface-2 text-ink">
             {card.icon}
           </span>
-          <span className="mt-4 flex flex-col gap-1">
+          <span className="mt-v16 flex flex-col gap-1">
             <span className="text-[15px] font-bold">{card.title}</span>
             <span className="text-[13.5px] font-medium text-muted">{card.body}</span>
           </span>

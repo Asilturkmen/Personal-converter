@@ -48,6 +48,42 @@ src/
     EmptyState.tsx  SourceCards.tsx  Footer.tsx  Icons.tsx
 ```
 
+## Ekran yüksekliğine uyum
+
+Tasarımın doğal yüksekliği ~1050 px. 27" bir monitörde bu zaten sığıyor, ama
+laptop (~930 px) ve MacBook (~760 px) ekranlarında taşıyordu.
+
+Çözüm sayfayı küçültmek **değil** — o zaman gövde metni 11 px'e düşer ve
+okunmaz. Bunun yerine yerin çoğunu tüketen şey daraltılıyor: boşluklar ve
+dekoratif blok yükseklikleri. Tipografi ve dokunma hedefleri sabit kalır.
+
+`src/index.css` içindeki `--spacing-v*` ölçeği bunu yapar:
+
+```css
+--spacing-v32: clamp(18px, 2.46vh, 32px);   /*  mt-8  -> mt-v32  */
+--spacing-v40: clamp(22px, 3.08vh, 40px);   /*  mt-10 -> mt-v40  */
+```
+
+Ölçek katsayıları `tavan / 13` seçildi; yani 1300 px ekran yüksekliğinde hepsi
+tavana oturur ve **büyük monitörde hiçbir şey değişmez.** Aynı mantık sabit
+yükseklikli bloklara da uygulandı:
+
+| | 27" (1340 px) | laptop (930 px) | MacBook (760 px) |
+|---|---|---|---|
+| header | 108 | 77 | 64 |
+| boş durum kutusu | 400 | 286 | 234 |
+| kalite satırı | 60 | 48 | 48 |
+| başlık (h1) | 40 | 30 | 30 |
+| gövde metni | 16 | 16 | 16 |
+| **toplam sayfa** | **~1050** | **~817** | **~772** |
+
+Sonuç: 930 px ve üzerinde kaydırma yok; 760 px'te yalnızca 5 kalite seçenekli
+YouTube videosunda ~10 px kaydırma kalıyor. Metin hiçbir boyutta küçülmüyor.
+
+Ayarlamak istersen tek yer `src/index.css` sonundaki `@theme` bloğu: tavanı
+değiştirmek 27"deki görünümü, tabanı değiştirmek kısa ekranlardaki sıkılığı
+belirler.
+
 ## Renkleri değiştirmek
 
 Tailwind v4 kullanılıyor, yani ayrı bir `tailwind.config.js` yok. Bütün token'lar

@@ -72,3 +72,38 @@
     @apply outline-2 outline-offset-2 outline-accent;
   }
 }
+
+/*
+  DİKEY RİTİM  (yükseklik-duyarlı boşluk ölçeği)
+
+  Tasarımın doğal yüksekliği ~1050px. 27" bir monitörde bu sığar; laptopta
+  (~930px) ve MacBook'ta (~760px) sığmaz. Çözüm sayfayı küçültmek DEĞİL —
+  o zaman yazılar okunmaz hale gelir. Bunun yerine yerin çoğunu yiyen şeyi,
+  yani boşlukları ve dekoratif blok yüksekliklerini ekran boyuna göre
+  daraltıyoruz; tipografi okunabilir kalır.
+
+      clamp(taban, ölçek, tavan)
+              |      |      └── 27" ekrandaki değer (bugünkü tasarım aynen)
+              |      └───────── 1vh = ekran yüksekliğinin %1'i
+              └──────────────── kısa ekranda inilebilecek en düşük değer
+
+  Ölçek katsayıları tavan/13 seçildi: 1300px ekran yüksekliğinde tavana
+  oturur, yani büyük monitörde hiçbir şey değişmez.
+
+  dvh değil vh kullanıyoruz: mobilde adres çubuğu gizlenince dvh değişir ve
+  sayfa kaydırma sırasında zıplar.
+
+  Kullanımı: mt-8 → mt-v32, py-5 → py-v20. Sayı, 27"deki px karşılığıdır.
+*/
+@theme {
+  --spacing-v10: clamp(8px, 0.77vh, 10px);
+  --spacing-v12: clamp(8px, 0.92vh, 12px);
+  --spacing-v14: clamp(10px, 1.08vh, 14px);
+  --spacing-v16: clamp(10px, 1.23vh, 16px);
+  --spacing-v18: clamp(12px, 1.38vh, 18px);
+  --spacing-v20: clamp(12px, 1.54vh, 20px);
+  --spacing-v24: clamp(14px, 1.85vh, 24px);
+  --spacing-v32: clamp(18px, 2.46vh, 32px);
+  --spacing-v40: clamp(22px, 3.08vh, 40px);
+  --spacing-v44: clamp(24px, 3.38vh, 44px);
+}

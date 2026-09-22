@@ -24,7 +24,7 @@ export default function OptionToggles({
   const isVideo = mode === 'video';
 
   return (
-    <div className="mt-5 flex flex-col gap-3.5">
+    <div className="mt-v20 flex flex-col gap-v14">
       <div className={rowClass}>
         <input
           id="option-one"

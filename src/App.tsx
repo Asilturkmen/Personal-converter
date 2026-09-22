@@ -99,22 +99,22 @@ export default function App() {
     <div className="flex min-h-dvh flex-col">
       <Header theme={theme} onToggleTheme={toggle} />
 
-      <main className="mx-auto w-full max-w-[1120px] grow px-5 pt-8 md:px-10 md:pt-11">
-        <h1 className="text-[30px] font-extrabold leading-[1.1] tracking-[-0.03em] md:text-[40px]">
+      <main className="mx-auto w-full max-w-[1120px] grow px-5 pt-v32 md:px-10 md:pt-v44">
+        <h1 className="text-[clamp(30px,3.08vh,40px)] font-extrabold leading-[1.1] tracking-[-0.03em]">
           Bağlantıyı yapıştır.
         </h1>
-        <p className="mt-3 max-w-[640px] text-[15px] font-medium leading-relaxed text-muted md:text-base">
+        <p className="mt-v12 max-w-[640px] text-[15px] font-medium leading-relaxed text-muted md:text-base">
           YouTube ve Instagram videolarını dilediğin kalitede indir ya da doğrudan MP3'e çevir.
         </p>
 
-        <div className="mt-6">
+        <div className="mt-v24">
           <UrlInput value={url} onChange={setUrl} onSubmit={handleFetch} loading={loading} />
         </div>
 
         {error && <ErrorNote message={error} />}
 
         {info ? (
-          <div className="mt-8 grid grid-cols-1 gap-8 md:grid-cols-[440px_1fr] md:gap-10">
+          <div className="mt-v32 grid grid-cols-1 gap-v32 md:grid-cols-[clamp(340px,33.85vh,440px)_1fr] md:gap-v40">
             <MediaPreview info={info} />
 
             <div className="min-w-0">

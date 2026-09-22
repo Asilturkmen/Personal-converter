@@ -10,13 +10,13 @@ interface Props {
 
 export default function QualityList({ options, selectedId, onSelect, legend }: Props) {
   return (
-    <fieldset className="mt-6 border-0 p-0">
+    <fieldset className="mt-v24 border-0 p-0">
       <div className="flex items-baseline justify-between">
         <legend className="float-left text-xs font-bold uppercase tracking-[0.09em] text-muted">{legend}</legend>
         <span className="text-[13px] font-medium text-muted">tahmini boyut</span>
       </div>
 
-      <div className="mt-2.5 overflow-hidden rounded-card border border-line bg-surface shadow-soft">
+      <div className="mt-v10 overflow-hidden rounded-card border border-line bg-surface shadow-soft">
         {options.map((option, index) => {
           const selected = option.id === selectedId;
           const last = index === options.length - 1;
@@ -25,7 +25,7 @@ export default function QualityList({ options, selectedId, onSelect, legend }: P
             <label
               key={option.id}
               className={
-                'flex h-[60px] cursor-pointer items-center justify-between px-[18px] transition-colors focus-within:outline-2 focus-within:outline-offset-[-2px] focus-within:outline-accent ' +
+                'flex h-[clamp(48px,4.62vh,60px)] cursor-pointer items-center justify-between px-[18px] transition-colors focus-within:outline-2 focus-within:outline-offset-[-2px] focus-within:outline-accent ' +
                 (last ? '' : 'border-b border-line-soft ') +
                 (selected ? 'bg-pick' : 'hover:bg-surface-2')
               }
