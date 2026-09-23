@@ -89,10 +89,7 @@ export default function App() {
   }
 
   const downloadLabel = selected
-    ? (mode === 'video' ? 'MP4 indir · ' : 'MP3 indir · ') +
-      selected.label +
-      ' · ' +
-      formatBytes(selected.sizeBytes)
+    ? (mode === 'video' ? 'MP4 indir · ' + selected.label : 'MP3 indir') + ' · ' + formatBytes(selected.sizeBytes)
     : 'İndir';
 
   return (
