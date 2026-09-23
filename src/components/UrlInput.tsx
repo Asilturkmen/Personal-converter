@@ -10,19 +10,27 @@ interface Props {
   loading: boolean;
   /** Verilirse "Temizle" butonu görünür: sayfayı ilk açılış hâline döndürür. */
   onClear?: () => void;
-  /** İndirme sürerken temizleme kapalı; inen dosya yanlışlıkla kaybolmasın. */
-  clearDisabled?: boolean;
+  /**
+   * İndirme sürüyor: yeni bağlantı getirilemez ve temizlenemez; inen dosya
+   * yanlışlıkla kaybolmasın. Kutuya yazmak ve yapıştırmak serbest, yalnızca
+   * getirme bekler.
+   */
+  locked?: boolean;
 }
 
-export default function UrlInput({ value, onChange, onSubmit, loading, onClear, clearDisabled = false }: Props) {
+const LOCKED_HINT = 'İndirme sürerken yeni bağlantı getirilemez. Bitmesini bekle ya da iptal et.';
+
+export default function UrlInput({ value, onChange, onSubmit, loading, onClear, locked = false }: Props) {
+  const canSubmit = !loading && !locked;
+
   const { paste, denied } = useClipboardPaste((text) => {
     onChange(text);
-    if (!loading) onSubmit(text);
+    if (canSubmit) onSubmit(text);
   });
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!loading && value.trim()) onSubmit(value.trim());
+    if (canSubmit && value.trim()) onSubmit(value.trim());
   }
 
   // Kutu boşken ya da tamamı seçiliyken yapıştırılan bağlantı hemen getirilir.
@@ -31,7 +39,7 @@ export default function UrlInput({ value, onChange, onSubmit, loading, onClear, 
     const input = event.currentTarget;
     const replacesAll = input.selectionStart === 0 && input.selectionEnd === input.value.length;
     const text = event.clipboardData.getData('text').trim();
-    if (!replacesAll || !text || loading) return;
+    if (!replacesAll || !text || !canSubmit) return;
 
     event.preventDefault();
     onChange(text);
@@ -40,7 +48,13 @@ export default function UrlInput({ value, onChange, onSubmit, loading, onClear, 
 
   return (
     <div>
+      {/*
+        noValidate: input type="url" şemasız bağlantıyı ("youtu.be/abc") geçersiz
+        sayıp formu tarayıcı düzeyinde durduruyordu. Doğrulamayı backend yapar
+        (şema yoksa https:// ekler) ve anlaşılır bir Türkçe hata döner.
+      */}
       <form
+        noValidate
         onSubmit={handleSubmit}
         className="flex items-center gap-2 rounded-card border border-line bg-surface p-1.5 pl-3.5 shadow-soft sm:gap-3 sm:p-2 sm:pl-5"
       >
@@ -66,9 +80,9 @@ export default function UrlInput({ value, onChange, onSubmit, loading, onClear, 
           <button
             type="button"
             onClick={onClear}
-            disabled={clearDisabled}
+            disabled={locked}
             aria-label="Temizle"
-            title={clearDisabled ? 'İndirme sürerken temizlenemez. Önce iptal et.' : 'Temizle ve baştan başla'}
+            title={locked ? 'İndirme sürerken temizlenemez. Önce iptal et.' : 'Temizle ve baştan başla'}
             className="flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-[11px] px-2.5 text-sm font-semibold text-muted transition-colors hover:bg-surface-2 hover:text-ink disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted sm:px-3"
           >
             <CloseIcon />
@@ -88,7 +102,8 @@ export default function UrlInput({ value, onChange, onSubmit, loading, onClear, 
 
         <button
           type="submit"
-          disabled={loading || !value.trim()}
+          disabled={!canSubmit || !value.trim()}
+          title={locked ? LOCKED_HINT : undefined}
           className="flex h-11 shrink-0 items-center justify-center gap-2 rounded-[11px] bg-accent px-3 text-[15px] font-bold text-white transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50 sm:px-6"
         >
           {loading ? <SpinnerIcon /> : <ArrowRightIcon className="h-[17px] w-[17px] sm:hidden" />}

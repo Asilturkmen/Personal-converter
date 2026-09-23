@@ -25,7 +25,6 @@ log = logging.getLogger('converter.media')
 
 # Kısa kenara göre standart etiketler. 1080p üst sınır config.MAX_HEIGHT ile.
 LADDER = (144, 240, 360, 480, 720, 1080, 1440, 2160)
-MP3_KBPS = 190  # -q:a 2 ortalaması; yalnızca boyut tahmini için
 
 
 class UserError(Exception):
@@ -41,6 +40,7 @@ class UserError(Exception):
 # Bağlantı doğrulama ve video kimliği
 # --------------------------------------------------------------------------
 
+VIDEO_ID = re.compile(r'[A-Za-z0-9_-]{11}')
 YOUTUBE_PATH_ID = re.compile(r'^/(?:shorts|live|embed|v)/([A-Za-z0-9_-]{11})')
 INSTAGRAM_PATH_ID = re.compile(r'^/(?:[^/]+/)?(?:p|reels?|tv)/([A-Za-z0-9_-]+)')
 INSTAGRAM_STORY = re.compile(r'^/stories/([^/]+)(?:/(\d+))?')
@@ -57,6 +57,16 @@ def validate_url(raw: str) -> str:
     host = (parts.hostname or '').lower()
     if parts.scheme not in ('http', 'https') or host not in config.ALLOWED_HOSTS:
         raise UserError('Yalnızca YouTube ve Instagram bağlantıları destekleniyor.')
+
+    # Tek bir içeriğe işaret etmeyen bağlantılar (oynatma listesi, kanal,
+    # profil) yt-dlp'ye hiç verilmez: yt-dlp listedeki her videoyu tek tek
+    # çözümler (ölçüldü: video başına ~1,75 sn), yüzlerce videoluk bir liste
+    # dakikalarca bir info slotunu ve bir çekirdeği tutar.
+    key = cache_key(url)
+    if platform_of(url) == 'youtube' and not key.startswith('yt:'):
+        raise UserError('Oynatma listeleri ve kanallar desteklenmiyor. Tek bir videonun bağlantısını yapıştır.')
+    if platform_of(url) == 'instagram' and not key.startswith(('ig:', 'igs:')):
+        raise UserError('Instagram\'da bir gönderinin, reel\'in ya da hikâyenin bağlantısını yapıştır; profil bağlantıları desteklenmiyor.')
     return url
 
 
@@ -74,13 +84,13 @@ def cache_key(url: str) -> str:
 
     if host.endswith('youtu.be'):
         video_id = path.strip('/').split('/')[0]
-        if video_id:
+        if VIDEO_ID.fullmatch(video_id):
             return 'yt:' + video_id
     elif 'youtube.com' in host:
-        video_id = parse_qs(parts.query).get('v', [None])[0]
-        if not video_id and (match := YOUTUBE_PATH_ID.match(path)):
+        video_id = parse_qs(parts.query).get('v', [''])[0]
+        if not VIDEO_ID.fullmatch(video_id) and (match := YOUTUBE_PATH_ID.match(path)):
             video_id = match.group(1)
-        if video_id:
+        if VIDEO_ID.fullmatch(video_id):
             return 'yt:' + video_id
     elif host.endswith('instagram.com'):
         if match := INSTAGRAM_PATH_ID.match(path):
@@ -117,12 +127,22 @@ class Choice:
     kind: str  # 'video' | 'audio'
     estimated_bytes: int
     inputs: list[Stream]
+    # True: boyut kaynağın bildirdiği dosya boyutlarından (ya da CBR MP3'te
+    # süre × bit hızından) geliyor. False: bit hızı × süre tahmini; HLS'te
+    # tepe bit hızı kullanıldığı için genelde fazla çıkar.
+    size_exact: bool = True
     height: int | None = None
     fps: int | None = None
     codec: str | None = None
 
     def public(self) -> dict:
-        data = {'id': self.id, 'label': self.label, 'kind': self.kind, 'estimatedBytes': self.estimated_bytes}
+        data = {
+            'id': self.id,
+            'label': self.label,
+            'kind': self.kind,
+            'estimatedBytes': self.estimated_bytes,
+            'estimateExact': self.size_exact,
+        }
         if self.kind == 'video':
             data.update(height=self.height, fps=self.fps, codec=self.codec)
         return data
@@ -200,6 +220,8 @@ def _ydl_options(platform: str) -> dict:
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
+        # Carousel gönderiler playlist döner; en fazla bu kadar girdi çözümlenir.
+        'playlistend': config.PLAYLIST_LIMIT,
         'skip_download': True,
         # Disk yasak: yt-dlp'nin imza/önbellek klasörünü kapat.
         'cachedir': False,
@@ -327,12 +349,13 @@ def _is_direct(f: dict) -> bool:
     return f.get('protocol') in ('https', 'http')
 
 
-def _size(f: dict, duration: int) -> int:
+def _size(f: dict, duration: int) -> tuple[int, bool]:
+    """(boyut, kesin mi)"""
     size = f.get('filesize') or f.get('filesize_approx')
     if size:
-        return int(size)
+        return int(size), True
     tbr = f.get('tbr') or 0
-    return int(tbr * 1000 / 8 * duration)
+    return int(tbr * 1000 / 8 * duration), False
 
 
 def _bucket(width: int | None, height: int | None) -> int | None:
@@ -426,7 +449,8 @@ def _build_media(url: str, platform: str, info: dict, duration: int) -> Media:
             id='mp3',
             label='MP3',
             kind='audio',
-            estimated_bytes=int(MP3_KBPS * 1000 / 8 * duration),
+            # CBR: süre × bit hızı, üstüne yalnızca ID3 etiketi eklenir.
+            estimated_bytes=int(config.MP3_BITRATE_KBPS * 1000 / 8 * duration),
             inputs=[_stream(mp3_source)],
         )
 
@@ -455,10 +479,12 @@ def _build_media(url: str, platform: str, info: dict, duration: int) -> Media:
         f = best[bucket][1]
         if _acodec(f) is not None:
             inputs = [_stream(f)]
-            size = _size(f, duration)
+            size, exact = _size(f, duration)
         else:
             inputs = [_stream(f), _stream(pairing_audio)]
-            size = _size(f, duration) + _size(pairing_audio, duration)
+            video_size, video_exact = _size(f, duration)
+            audio_size, audio_exact = _size(pairing_audio, duration)
+            size, exact = video_size + audio_size, video_exact and audio_exact
 
         fps = f.get('fps')
         choices[f'v{bucket}'] = Choice(
@@ -467,6 +493,7 @@ def _build_media(url: str, platform: str, info: dict, duration: int) -> Media:
             kind='video',
             height=bucket,
             estimated_bytes=size,
+            size_exact=exact and size > 0,
             inputs=inputs,
             fps=round(fps) if fps else None,
             codec=_short_codec(_vcodec(f)),

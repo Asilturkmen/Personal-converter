@@ -15,21 +15,21 @@ import shutil
 import sys
 from contextlib import asynccontextmanager
 
-import anyio
 import httpx
 import yt_dlp
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 import config
+import downloads
 import media
-import relay
-from limits import PerKeySlots, Slots
+import thumbnails
+from limits import PerKeySlots, RateLimiter, Slots
 from media import Media, UserError
 from names import content_disposition, safe_filename
-from stream import FFmpegStream, build_command
-from tags import id3_tag, to_jpeg
+from relay import RelayServer
 
 # Windows konsolu cp1254 olabilir; Türkçe/Japonca başlıklar log'u çökertmesin.
 for _stream in (sys.stdout, sys.stderr):
@@ -43,13 +43,9 @@ log = logging.getLogger('converter')
 # httpx her relay parçasını imzalı CDN adresiyle loglar; gürültü ve sızıntı.
 logging.getLogger('httpx').setLevel(logging.WARNING)
 
-BUSY = 'Şu an yoğunluk var, birkaç saniye sonra tekrar dene.'
-FIRST_BYTE_TIMEOUT = 60
-THUMBNAIL_MAX_BYTES = 8 * 1024 * 1024
-
-download_slots = Slots(config.MAX_CONCURRENT_DOWNLOADS)
 info_slots = Slots(config.MAX_CONCURRENT_INFO)
-ip_slots = PerKeySlots(config.MAX_DOWNLOADS_PER_IP)
+info_ip_slots = PerKeySlots(config.MAX_INFO_PER_IP)
+info_rate = RateLimiter(config.INFO_PER_MINUTE_PER_IP)
 
 
 # --------------------------------------------------------------------------
@@ -93,9 +89,12 @@ async def lifespan(app: FastAPI):
         follow_redirects=True,
         limits=httpx.Limits(max_connections=50),
     )
+    app.state.relay = RelayServer(app.state.http)
+    await app.state.relay.start()
     try:
         yield
     finally:
+        await app.state.relay.stop()
         await app.state.http.aclose()
 
 
@@ -118,14 +117,20 @@ async def unexpected_error_handler(request: Request, error: Exception):
 # --------------------------------------------------------------------------
 
 def client_ip(request: Request) -> str:
-    # Not: sunucuya taşınınca nginx arkasında X-Forwarded-For'a bakılmalı.
+    """Gerçek istemci IP'si.
+
+    Reverse proxy arkasında request.client, uvicorn'un ProxyHeadersMiddleware'i
+    tarafından X-Forwarded-For'dan çözülmüş hâliyle gelir; başlığa yalnızca
+    FORWARDED_ALLOW_IPS'teki adreslerden gelen isteklerde güvenilir (bkz.
+    config.py, serve.py). Burada ikinci bir ayrıştırma yapılmaz: iki ayrı
+    mekanizma birbirinin kararını ezer."""
     return request.client.host if request.client else 'unknown'
 
 
 _inflight: dict[str, asyncio.Future] = {}
 
 
-async def get_media(url: str) -> Media:
+async def get_media(url: str, ip: str) -> Media:
     key = media.cache_key(url)
     cached = media.cache.get(key)
     if cached is not None:
@@ -135,8 +140,15 @@ async def get_media(url: str) -> Media:
     if key in _inflight:
         return await asyncio.shield(_inflight[key])
 
+    # Sınırlar yalnızca gerçek çözümlemeye (önbellek ıskası) uygulanır.
+    if not info_rate.allow(ip):
+        raise UserError('Kısa sürede çok fazla bağlantı getirdin. Bir dakika bekleyip tekrar dene.', 429)
+    if not info_ip_slots.try_acquire(ip):
+        raise UserError('Önceki bağlantın hâlâ çözümleniyor. Birkaç saniye bekleyip tekrar dene.', 429)
     if not info_slots.try_acquire():
-        raise UserError(BUSY, 503)
+        info_ip_slots.release(ip)
+        raise UserError(downloads.BUSY, 503)
+
     future: asyncio.Future = asyncio.get_running_loop().create_future()
     _inflight[key] = future
     try:
@@ -146,29 +158,28 @@ async def get_media(url: str) -> Media:
         future.set_result(result)
         return result
     except BaseException as error:
-        future.set_exception(error if isinstance(error, Exception) else UserError(BUSY, 503))
+        future.set_exception(error if isinstance(error, Exception) else UserError(downloads.BUSY, 503))
         future.exception()  # bekleyen yoksa "never retrieved" uyarısı çıkmasın
         raise
     finally:
         _inflight.pop(key, None)
         info_slots.release()
+        info_ip_slots.release(ip)
 
 
-async def fetch_thumbnail(client: httpx.AsyncClient, item: Media) -> tuple[bytes, str] | None:
-    if not item.thumbnail:
-        return None
-    try:
-        async with client.stream('GET', item.thumbnail, headers=item.thumbnail_headers) as response:
-            response.raise_for_status()
-            data = bytearray()
-            async for chunk in response.aiter_bytes():
-                data += chunk
-                if len(data) > THUMBNAIL_MAX_BYTES:
-                    return None
-            return bytes(data), response.headers.get('content-type', 'image/jpeg').split(';')[0]
-    except httpx.HTTPError as error:
-        log.info('kapak alınamadı: %s', error)
-        return None
+async def _prepare(request: Request, url: str, format_id: str, cover: bool, tags: bool) -> downloads.Reservation:
+    url = media.validate_url(url)
+    ip = client_ip(request)
+    http = request.app.state.http
+    return await downloads.prepare(
+        ip=ip,
+        format_id=format_id,
+        cover=cover,
+        tags=tags,
+        relay=request.app.state.relay,
+        load_media=lambda: get_media(url, ip),
+        load_cover=lambda item: thumbnails.jpeg(http, item),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -181,144 +192,69 @@ async def health(request: Request):
 
 
 @app.get('/api/info')
-async def info(url: str = ''):
-    item = await get_media(media.validate_url(url))
+async def info(request: Request, url: str = ''):
+    item = await get_media(media.validate_url(url), client_ip(request))
     return item.public()
 
 
 @app.get('/api/thumbnail')
 async def thumbnail(request: Request, url: str = '', download: bool = False):
-    item = await get_media(media.validate_url(url))
-    result = await fetch_thumbnail(request.app.state.http, item)
-    if result is None:
+    item = await get_media(media.validate_url(url), client_ip(request))
+    thumb = await thumbnails.get(request.app.state.http, item)
+    if thumb is None:
         raise UserError('Kapak görseli alınamadı.', 404)
-    data, content_type = result
     headers = {'Cache-Control': 'private, max-age=1800'}
     if download:
-        ext = {'image/webp': 'webp', 'image/png': 'png'}.get(content_type, 'jpg')
+        ext = {'image/webp': 'webp', 'image/png': 'png'}.get(thumb.content_type, 'jpg')
         headers['Content-Disposition'] = content_disposition(safe_filename(item.title, ext))
-    return Response(data, media_type=content_type, headers=headers)
+    return Response(thumb.data, media_type=thumb.content_type, headers=headers)
+
+
+class PrepareRequest(BaseModel):
+    url: str
+    format: str
+    cover: bool = False
+    tags: bool = False
+
+
+@app.post('/api/download/prepare')
+async def prepare_download(request: Request, body: PrepareRequest):
+    """Yer ayırır ve ffmpeg'i başlatır; hata varsa dosya indirmesi başlamadan
+    JSON olarak döner. Başarılıysa kısa ömürlü bir bilet verir."""
+    reservation = await _prepare(request, body.url, body.format, body.cover, body.tags)
+    # İstemci beklerken vazgeçtiyse (iptal, sekme kapandı) yer hemen boşalsın;
+    # TTL'i beklemesin.
+    if await request.is_disconnected():
+        reservation.release()
+        return Response(status_code=499)
+    return {
+        'ticket': reservation.ticket,
+        'filename': reservation.filename,
+        'estimatedBytes': reservation.choice.estimated_bytes + len(reservation.header),
+        'expiresIn': config.RESERVATION_TTL_SECONDS,
+    }
 
 
 @app.get('/api/download')
 async def download(
     request: Request,
+    ticket: str = '',
     url: str = '',
     format: str = '',
     cover: bool = False,
     tags: bool = False,
 ):
-    url = media.validate_url(url)
-    ip = client_ip(request)
-
-    if not ip_slots.try_acquire(ip):
-        raise UserError('Zaten devam eden bir indirmen var. O bitince yenisini başlat.', 429)
-    if not download_slots.try_acquire():
-        ip_slots.release(ip)
-        raise UserError(BUSY, 503)
-
-    tokens: list[str] = []
-    proc: FFmpegStream | None = None
-
-    def cleanup() -> None:
-        if proc is not None:
-            proc.close()
-        for token in tokens:
-            relay.unregister(token)
-        download_slots.release()
-        ip_slots.release(ip)
-
-    try:
-        item = await get_media(url)
-        choice = item.choices.get(format)
-        if choice is None:
-            raise UserError('Bu format bu video için mevcut değil. Bağlantıyı yeniden getir.', 400)
-        if choice.estimated_bytes > config.MAX_BYTES:
-            limit = config.MAX_BYTES // (1024 * 1024)
-            raise UserError(f'Dosya çok büyük (sınır {limit} MB). Daha düşük bir çözünürlük seç.', 413)
-
-        # Parçalı okunması gereken girdiler loopback relay üzerinden beslenir.
-        port = (request.scope.get('server') or ('127.0.0.1', 8000))[1]
-        relay_urls: list[str | None] = []
-        for source in choice.inputs:
-            if source.chunk_size:
-                token = relay.register(source)
-                tokens.append(token)
-                relay_urls.append(f'http://127.0.0.1:{port}/internal/relay/{token}')
-            else:
-                relay_urls.append(None)
-
-        # MP3 etiketi bellekte hazırlanıp akışın başına eklenir (bkz. tags.py).
-        header = b''
-        if choice.kind == 'audio' and (cover or tags):
-            cover_jpeg = None
-            if cover:
-                fetched = await fetch_thumbnail(request.app.state.http, item)
-                if fetched:
-                    cover_jpeg = await run_in_threadpool(to_jpeg, *fetched)
-            header = id3_tag(
-                title=item.title if tags else None,
-                artist=item.uploader if tags else None,
-                cover=cover_jpeg,
-            )
-
-        proc = FFmpegStream(build_command(choice, relay_urls=relay_urls))
-        proc.start()
-
-        # İlk baytı yanıt başlamadan bekle: ffmpeg CDN'i açamazsa kullanıcı
-        # boş bir dosya yerine anlaşılır bir hata görür.
-        first = b''
-        with anyio.move_on_after(FIRST_BYTE_TIMEOUT):
-            first = await anyio.to_thread.run_sync(proc.read, abandon_on_cancel=True)
-        if not first:
-            log.warning('ffmpeg başlamadı: %s', proc.error_text())
-            raise UserError('İndirme başlatılamadı. Birkaç saniye sonra tekrar dene; sürerse bağlantıyı yeniden getir.', 502)
-    except BaseException:
-        cleanup()
-        raise
-
-    async def body():
-        try:
-            if header:
-                yield header
-            yield first
-            while True:
-                chunk = await anyio.to_thread.run_sync(proc.read, abandon_on_cancel=True)
-                if not chunk:
-                    break
-                yield chunk
-            # Hata varsa StreamFailed yükselir ve bağlantı temiz kapanmaz;
-            # tarayıcı yarım dosyayı tamamlanmış saymaz.
-            await anyio.to_thread.run_sync(proc.finish)
-            log.info('indirme bitti: %s %s (%d bayt)', format, item.title, proc.bytes_sent)
-        finally:
-            # İstemci koptuğunda da buraya düşülür: ffmpeg öldürülür.
-            cleanup()
-
-    ext = 'mp3' if choice.kind == 'audio' else 'mp4'
-    headers = {
-        'Content-Disposition': content_disposition(safe_filename(item.title, ext)),
-        'Cache-Control': 'no-store',
-        'X-Accel-Buffering': 'no',
-        'X-Estimated-Bytes': str(choice.estimated_bytes),
-        # Content-Length bilerek yok: tahmin gerçek boyuttan saparsa indirme bozulur.
-    }
-    return StreamingResponse(body(), media_type='audio/mpeg' if ext == 'mp3' else 'video/mp4', headers=headers)
+    """Dosyayı akıtır. `ticket` (prepare'den) ya da doğrudan `url` + `format`."""
+    if ticket:
+        reservation = downloads.consume(ticket, client_ip(request))
+    else:
+        reservation = await _prepare(request, url, format, cover, tags)
+        downloads.consume(reservation.ticket, reservation.ip)
+    return downloads.response(reservation)
 
 
-# --------------------------------------------------------------------------
-# İç uç: ffmpeg'i CDN'den parça parça besler (bkz. relay.py)
-# /api dışında durur; dışarıya proxy'lenmez.
-# --------------------------------------------------------------------------
-
-@app.get('/internal/relay/{token}')
-async def relay_endpoint(request: Request, token: str):
-    if client_ip(request) not in ('127.0.0.1', '::1'):
-        return Response(status_code=404)
-    source = relay.lookup(token)
-    if source is None:
-        return Response(status_code=404)
-    return StreamingResponse(
-        relay.body(request.app.state.http, token, source),
-        media_type='application/octet-stream',
-    )
+@app.delete('/api/download/{ticket}', status_code=204)
+async def cancel_download(request: Request, ticket: str):
+    """Kullanılmayacak bir bileti hemen serbest bırakır (kullanıcı iptal etti)."""
+    downloads.cancel(ticket, client_ip(request))
+    return Response(status_code=204)

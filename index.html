@@ -14,6 +14,20 @@
       rel="stylesheet"
     />
     <title>Asil Personal-Converter — video ve MP3 indirici</title>
+    <script>
+      // Tema ilk çizimden önce uygulanır; yoksa koyu tema kullanıcısı açılışta bir
+      // an açık tema görür. Kural useTheme.ts ile aynı: kayıtlı tercih, yoksa sistem.
+      (function () {
+        var theme = null;
+        try {
+          theme = localStorage.getItem('asil-converter-theme');
+        } catch (e) {}
+        if (theme !== 'light' && theme !== 'dark') {
+          theme = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+        if (theme === 'dark') document.documentElement.classList.add('dark');
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

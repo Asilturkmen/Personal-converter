@@ -39,6 +39,9 @@ export default function App() {
   const [download, setDownload] = useState<DownloadState>({ phase: 'idle' });
   const abortRef = useRef<AbortController | null>(null);
   const downloading = download.phase === 'starting' || download.phase === 'streaming';
+  // State bir sonraki çizime kadar güncellenmez; aynı olay döngüsündeki çift
+  // tıklamayı ancak eşzamanlı bir ref durdurur.
+  const activeDownload = useRef(false);
 
   const videos = useMemo(() => info?.formats.filter((format) => format.kind === 'video') ?? [], [info]);
   const audio = useMemo(() => info?.formats.filter((format) => format.kind === 'audio') ?? [], [info]);
@@ -47,10 +50,11 @@ export default function App() {
 
   async function handleFetch(target: string) {
     const value = target.trim();
-    if (!value) return;
+    // İndirme sürerken yeni bağlantı getirilmez: sayfa değişirse inen dosya
+    // sessizce iptal olurdu (arayüzde de kilitli, bu ikinci güvence).
+    if (!value || activeDownload.current) return;
 
     const requestId = ++lastRequest.current;
-    abortRef.current?.abort();
     setLoading(true);
     setFetchError(null);
     setInfo(null);
@@ -79,8 +83,9 @@ export default function App() {
   // Tıklama işleyicisi: startDownload'dan önce hiçbir await olmamalı
   // (showSaveFilePicker kullanıcı etkileşimi süresi içinde açılmak zorunda).
   function handleDownload() {
-    if (!info || !selected || downloading) return;
+    if (!info || !selected || activeDownload.current) return;
 
+    activeDownload.current = true;
     const controller = new AbortController();
     abortRef.current = controller;
     setDownload({ phase: 'starting' });
@@ -90,7 +95,7 @@ export default function App() {
       format: selected,
       options: audioOptions,
       signal: controller.signal,
-      onProgress: (received, estimated) => setDownload({ phase: 'streaming', received, estimated }),
+      onProgress: (received, estimated, exact) => setDownload({ phase: 'streaming', received, estimated, exact }),
     })
       .then((result) => {
         if (result === 'cancelled') {
@@ -116,6 +121,7 @@ export default function App() {
         });
       })
       .finally(() => {
+        activeDownload.current = false;
         if (abortRef.current === controller) abortRef.current = null;
       });
   }
@@ -126,7 +132,7 @@ export default function App() {
 
   // Sayfayı ilk açılış hâline döndürür. İndirme sürerken çağrılmaz (buton pasif).
   function handleClear() {
-    if (downloading) return;
+    if (activeDownload.current) return;
     lastRequest.current += 1; // yolda olan bir getirme varsa sonucu yok sayılsın
     setUrl('');
     setInfo(null);
@@ -165,7 +171,7 @@ export default function App() {
             onSubmit={handleFetch}
             loading={loading}
             onClear={canClear ? handleClear : undefined}
-            clearDisabled={downloading}
+            locked={downloading}
           />
         </div>
 
