@@ -57,9 +57,10 @@ _pending: dict[str, Reservation] = {}
 @dataclass(eq=False)
 class Reservation:
     ip: str
-    item: Media
-    choice: Choice
     relay: RelayServer
+    # prepare başarılı dönmüşse ikisi de doludur.
+    item: Media = None  # type: ignore[assignment]
+    choice: Choice = None  # type: ignore[assignment]
     ticket: str = field(default_factory=lambda: secrets.token_urlsafe(24))
     relays: list[RelayTicket] = field(default_factory=list)
     proc: FFmpegStream | None = None
@@ -77,6 +78,16 @@ class Reservation:
     def filename(self) -> str:
         return safe_filename(self.item.title, self.ext)
 
+    def stop_pipeline(self) -> None:
+        """ffmpeg'i ve relay biletlerini kapatır; slotlara dokunmaz."""
+        if self.proc:
+            self.proc.close()
+            self.proc = None
+        for ticket in self.relays:
+            self.relay.unregister(ticket)
+        self.relays = []
+        self.first = b''
+
     def release(self) -> None:
         if self._released:
             return
@@ -84,10 +95,7 @@ class Reservation:
         if self.expiry:
             self.expiry.cancel()
         _pending.pop(self.ticket, None)
-        if self.proc:
-            self.proc.close()
-        for ticket in self.relays:
-            self.relay.unregister(ticket)
+        self.stop_pipeline()
         download_slots.release()
         ip_slots.release(self.ip)
 
@@ -99,11 +107,14 @@ async def prepare(
     cover: bool,
     tags: bool,
     relay: RelayServer,
-    load_media: Callable[[], Awaitable[Media]],
+    load_media: Callable[[bool], Awaitable[Media]],
     load_cover: Callable[[Media], Awaitable[bytes | None]],
 ) -> Reservation:
     """Başarılı dönerse slotlar ayrılmış ve ffmpeg ilk baytı üretmiştir.
-    Hata olursa her şey serbest bırakılmış olarak UserError yükselir."""
+    Hata olursa her şey serbest bırakılmış olarak UserError yükselir.
+
+    load_media(fresh): fresh=True önbelleği atlayıp videoyu yeniden çözümler.
+    """
     # Sınırlar ağır işten (çözümleme, ffmpeg) önce kontrol edilir.
     if not ip_slots.try_acquire(ip):
         raise UserError('Zaten devam eden bir indirmen var. O bitince yenisini başlat.', 429)
@@ -111,59 +122,80 @@ async def prepare(
         ip_slots.release(ip)
         raise UserError(BUSY, 503)
 
-    reservation: Reservation | None = None
+    # Bu andan itibaren slotların sahibi rezervasyon.
+    reservation = Reservation(ip=ip, relay=relay)
     try:
-        item = await load_media()
-        choice = item.choices.get(format_id)
-        if choice is None:
-            raise UserError('Bu format bu video için mevcut değil. Bağlantıyı yeniden getir.', 400)
+        # CDN adresleri önbellekteyken geçersizleşebiliyor: YouTube bazen ~6 saat
+        # dolmadan 403 dönüyor (gözlendi). Kaynak açılamazsa video bir kez taze
+        # çözümlenip yeniden denenir; kullanıcı yalnızca birkaç saniye fazla bekler.
+        for attempt in (1, 2):
+            item = await load_media(attempt == 2)
+            choice = item.choices.get(format_id)
+            if choice is None:
+                raise UserError('Bu format bu video için mevcut değil. Bağlantıyı yeniden getir.', 400)
 
-        limit = config.MAX_BYTES * (1 if choice.size_exact else APPROX_TOLERANCE)
-        if choice.estimated_bytes > limit:
-            megabytes = config.MAX_BYTES // (1024 * 1024)
-            raise UserError(f'Dosya çok büyük (sınır {megabytes} MB). Daha düşük bir çözünürlük seç.', 413)
+            limit = config.MAX_BYTES * (1 if choice.size_exact else APPROX_TOLERANCE)
+            if choice.estimated_bytes > limit:
+                megabytes = config.MAX_BYTES // (1024 * 1024)
+                raise UserError(f'Dosya çok büyük (sınır {megabytes} MB). Daha düşük bir çözünürlük seç.', 413)
 
-        reservation = Reservation(ip=ip, item=item, choice=choice, relay=relay)
-
-        # Parçalı okunması gereken girdiler loopback relay'den beslenir.
-        relay_urls: list[str | None] = []
-        for source in choice.inputs:
-            if source.chunk_size:
-                ticket = relay.register(source)
-                reservation.relays.append(ticket)
-                relay_urls.append(relay.url(ticket))
-            else:
-                relay_urls.append(None)
-
-        # MP3 etiketi bellekte hazırlanıp akışın başına eklenir (bkz. tags.py).
-        if choice.kind == 'audio' and (cover or tags):
-            reservation.header = id3_tag(
-                title=item.title if tags else None,
-                artist=item.uploader if tags else None,
-                cover=await load_cover(item) if cover else None,
-            )
-
-        reservation.proc = FFmpegStream(build_command(choice, relay_urls=relay_urls))
-        reservation.proc.start()
-
-        # İlk bayt gelmeden bilet verilmez: ffmpeg kaynağı açamazsa kullanıcı
-        # boş bir dosya yerine anlaşılır bir hata görür.
-        with anyio.move_on_after(FIRST_BYTE_TIMEOUT):
-            reservation.first = await anyio.to_thread.run_sync(reservation.proc.read, abandon_on_cancel=True)
-        if not reservation.first:
-            log.warning('ffmpeg başlamadı: %s', reservation.proc.error_text())
+            reservation.item, reservation.choice = item, choice
+            if await _start(reservation, cover=cover, tags=tags, load_cover=load_cover):
+                break
+            reservation.stop_pipeline()
+            if attempt == 1:
+                log.info('kaynak açılamadı; CDN adresleri geçersiz olabilir, video yeniden çözümleniyor')
+        else:
             raise UserError('İndirme başlatılamadı. Birkaç saniye sonra tekrar dene; sürerse bağlantıyı yeniden getir.', 502)
     except BaseException:
-        if reservation:
-            reservation.release()
-        else:
-            download_slots.release()
-            ip_slots.release(ip)
+        reservation.release()
         raise
 
     _pending[reservation.ticket] = reservation
     reservation.expiry = asyncio.get_running_loop().call_later(config.RESERVATION_TTL_SECONDS, _expire, reservation)
     return reservation
+
+
+async def _start(
+    reservation: Reservation,
+    *,
+    cover: bool,
+    tags: bool,
+    load_cover: Callable[[Media], Awaitable[bytes | None]],
+) -> bool:
+    """ffmpeg'i başlatır ve ilk baytı bekler. İlk bayt geldiyse True."""
+    item, choice, relay = reservation.item, reservation.choice, reservation.relay
+
+    # Parçalı okunması gereken girdiler loopback relay'den beslenir.
+    relay_urls: list[str | None] = []
+    for source in choice.inputs:
+        if source.chunk_size:
+            ticket = relay.register(source)
+            reservation.relays.append(ticket)
+            relay_urls.append(relay.url(ticket))
+        else:
+            relay_urls.append(None)
+
+    # MP3 etiketi bellekte hazırlanıp akışın başına eklenir (bkz. tags.py).
+    reservation.header = b''
+    if choice.kind == 'audio' and (cover or tags):
+        reservation.header = id3_tag(
+            title=item.title if tags else None,
+            artist=item.uploader if tags else None,
+            cover=await load_cover(item) if cover else None,
+        )
+
+    reservation.proc = FFmpegStream(build_command(choice, relay_urls=relay_urls))
+    reservation.proc.start()
+
+    # İlk bayt gelmeden bilet verilmez: ffmpeg kaynağı açamazsa kullanıcı
+    # boş bir dosya yerine anlaşılır bir hata görür.
+    with anyio.move_on_after(FIRST_BYTE_TIMEOUT):
+        reservation.first = await anyio.to_thread.run_sync(reservation.proc.read, abandon_on_cancel=True)
+    if not reservation.first:
+        log.warning('ffmpeg başlamadı: %s', reservation.proc.error_text())
+        return False
+    return True
 
 
 def _expire(reservation: Reservation) -> None:

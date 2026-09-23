@@ -130,8 +130,12 @@ def client_ip(request: Request) -> str:
 _inflight: dict[str, asyncio.Future] = {}
 
 
-async def get_media(url: str, ip: str) -> Media:
+async def get_media(url: str, ip: str, fresh: bool = False) -> Media:
+    """fresh=True: önbellekteki kayıt (ör. CDN adresleri 403 dönmeye başladıysa)
+    atılır ve video yeniden çözümlenir."""
     key = media.cache_key(url)
+    if fresh:
+        media.cache.drop(key)
     cached = media.cache.get(key)
     if cached is not None:
         return cached
@@ -177,7 +181,7 @@ async def _prepare(request: Request, url: str, format_id: str, cover: bool, tags
         cover=cover,
         tags=tags,
         relay=request.app.state.relay,
-        load_media=lambda: get_media(url, ip),
+        load_media=lambda fresh: get_media(url, ip, fresh=fresh),
         load_cover=lambda item: thumbnails.jpeg(http, item),
     )
 

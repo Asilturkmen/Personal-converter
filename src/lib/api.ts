@@ -18,7 +18,10 @@ async function readError(response: Response): Promise<string> {
   } catch {
     /* JSON değilse genel mesaja düş */
   }
-  if (response.status === 502 || response.status === 504) return 'Sunucu şu an yanıt vermiyor. Birkaç saniye sonra tekrar dene.';
+  // Backend'in kendi hataları her zaman JSON'dur. JSON olmayan bir 5xx'i önündeki
+  // proxy üretmiştir (geliştirmede Vite boş bir 500, sunucuda nginx 502 döner):
+  // backend kapalı ya da ulaşılamıyor.
+  if (response.status >= 500) return NETWORK_ERROR;
   return 'Beklenmeyen bir hata oluştu. Tekrar dene.';
 }
 
