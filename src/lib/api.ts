@@ -60,12 +60,8 @@ export async function fetchMediaInfo(url: string): Promise<MediaInfo> {
           { id: '720p', label: '720p', sub: 'HD · 30 fps', sizeBytes: 77_594_624, ext: 'mp4' },
           { id: '480p', label: '480p', sub: 'Veri dostu', sizeBytes: 39_845_888, ext: 'mp4' },
         ],
-    audio: [
-      { id: '320', label: '320 kbps', sub: 'MP3 · en yüksek kalite', sizeBytes: 29_360_128, ext: 'mp3' },
-      { id: '256', label: '256 kbps', sub: 'MP3 · yüksek kalite', sizeBytes: 23_068_672, ext: 'mp3' },
-      { id: '192', label: '192 kbps', sub: 'MP3 · dengeli', sizeBytes: 17_825_792, ext: 'mp3' },
-      { id: '128', label: '128 kbps', sub: 'MP3 · küçük dosya', sizeBytes: 11_534_336, ext: 'mp3' },
-    ],
+    // MP3'te kalite seçimi yok: her zaman en yüksek kalite (320 kbps) iner.
+    audio: [{ id: '320', label: '320 kbps', sub: 'MP3 · en yüksek kalite', sizeBytes: 29_360_128, ext: 'mp3' }],
   };
 }
 

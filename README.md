@@ -13,7 +13,7 @@
 **Bağlantıyı yapıştır, MP4 ya da MP3 olarak indir.** Kişisel dönüştürücü arayüzü.
 
 React + TypeScript + Vite + Tailwind CSS v4. Tasarım tuvalindeki dört artboard'un
-çalışan karşılığı: açık/koyu tema, MP4/MP3 sekmesi, kalite seçimi, altyazı ve
+çalışan karşılığı: açık/koyu tema, MP4/MP3 sekmesi, video kalite seçimi (MP3 her zaman 320 kbps), altyazı ve
 kapak seçenekleri, mobil yerleşim.
 
 Şu an tüm veriler sahte. Arka uç yazıldığında tek bir dosya değişiyor: `src/lib/api.ts`.
@@ -87,8 +87,8 @@ yapışır. Artan boşluk böylece footer'ın altında değil üstünde toplanı
 büyük monitörde sayfa yarım kalmış gibi görünmez.
 
 Kaydırma durumu: boş ekranda hiçbir boyutta yok. Bağlantı getirildikten sonra
-5 kalite seçenekli YouTube videosunda 925 px'te ~34 px kalıyor; Instagram ve
-MP3 listelerinde yok.
+5 kalite seçenekli YouTube videosunda 925 px'te ~34 px kalıyor; Instagram listesinde ve
+MP3 sekmesinde (kalite listesi yok) yok.
 
 **Ayar:** her şey `src/index.css` başındaki `:root` bloğunda. Soldaki sayı
 kısa ekranı, sağdaki büyük ekranı belirler; `160` ise geçişin tamamlandığı

@@ -2,9 +2,9 @@ import { AudioIcon, VerticalVideoIcon, WideVideoIcon } from './Icons';
 import type { ReactNode } from 'react';
 
 const cards: { icon: ReactNode; title: string; body: string }[] = [
-  { icon: <WideVideoIcon />, title: 'YouTube', body: 'Video, Shorts ve canlı yayın kaydı' },
+  { icon: <WideVideoIcon />, title: 'YouTube', body: 'Videolar ve Shorts' },
   { icon: <VerticalVideoIcon />, title: 'Instagram', body: 'Reels, gönderi videoları ve hikâyeler' },
-  { icon: <AudioIcon className="h-[18px] w-[18px]" />, title: 'MP3 dönüştürme', body: '128, 192, 256 ve 320 kbps' },
+  { icon: <AudioIcon className="h-[18px] w-[18px]" />, title: 'MP3 dönüştürme', body: 'Otomatik en yüksek kalite, 320 kbps' },
 ];
 
 export default function SourceCards() {

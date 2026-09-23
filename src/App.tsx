@@ -104,7 +104,7 @@ export default function App() {
           Bağlantıyı yapıştır.
         </h1>
         <p className="mt-v12 max-w-[640px] text-[15px] font-medium leading-relaxed text-muted md:text-base">
-          YouTube ve Instagram videolarını dilediğin kalitede indir ya da doğrudan MP3'e çevir.
+          YouTube ve Instagram videolarını dilediğin kalitede indir ya da en yüksek kalitede MP3'e çevir.
         </p>
 
         <div className="mt-v24">
@@ -120,12 +120,15 @@ export default function App() {
             <div className="min-w-0">
               <FormatTabs mode={mode} onChange={handleModeChange} />
 
-              <QualityList
-                options={options}
-                selectedId={selected?.id ?? null}
-                onSelect={setQualityId}
-                legend={mode === 'video' ? 'Çözünürlük' : 'Ses kalitesi'}
-              />
+              {/* MP3'te kalite seçtirilmiyor; en yüksek kalite otomatik seçili. */}
+              {mode === 'video' && (
+                <QualityList
+                  options={options}
+                  selectedId={selected?.id ?? null}
+                  onSelect={setQualityId}
+                  legend="Çözünürlük"
+                />
+              )}
 
               <OptionToggles
                 mode={mode}
