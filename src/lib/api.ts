@@ -1,96 +1,185 @@
-import type { DownloadRequest, DownloadTicket, MediaInfo, Platform } from '../types';
+import type { AudioOptions, MediaFormat, MediaInfo } from '../types';
+import { safeFilename } from './format';
 
 /*
-  ---------------------------------------------------------------------------
-  SAHTE (MOCK) API
-  ---------------------------------------------------------------------------
-  Arayuzun tamami yalnizca bu iki fonksiyona bagli. Arka ucu yazdiginda
-  govdelerini gercek fetch cagrilariyla degistirmen yeterli, baska hicbir
-  dosyaya dokunmana gerek yok.
-
-  Ornek gercek karsiliklari en altta yorum icinde duruyor.
+  Backend ile konuşan tek dosya. Yollar geliştirmede Vite proxy'si
+  (vite.config.ts), sunucuda aynı origin üzerinden gider; CORS yok.
 */
 
-const MOCK_DELAY_MS = 700;
+/** Blob'a toplanabilecek en büyük dosya. Üstü telefonda belleği patlatır. */
+const BLOB_LIMIT = 250 * 1024 * 1024;
 
-const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const NETWORK_ERROR = 'Sunucuya ulaşılamadı. Bağlantını kontrol edip tekrar dene.';
+const STREAM_BROKEN = 'İndirme yarıda kesildi, dosya eksik kaldı. Tekrar dene.';
 
-export function detectPlatform(url: string): Platform {
-  const value = url.toLowerCase();
-  if (value.includes('youtube.com') || value.includes('youtu.be')) return 'youtube';
-  if (value.includes('instagram.com')) return 'instagram';
-  return 'other';
-}
-
-export function isSupportedUrl(url: string): boolean {
-  return detectPlatform(url) !== 'other';
+async function readError(response: Response): Promise<string> {
+  try {
+    const body = await response.json();
+    if (typeof body?.detail === 'string') return body.detail;
+  } catch {
+    /* JSON değilse genel mesaja düş */
+  }
+  if (response.status === 502 || response.status === 504) return 'Sunucu şu an yanıt vermiyor. Birkaç saniye sonra tekrar dene.';
+  return 'Beklenmeyen bir hata oluştu. Tekrar dene.';
 }
 
 export async function fetchMediaInfo(url: string): Promise<MediaInfo> {
-  await delay(MOCK_DELAY_MS);
-
-  const platform = detectPlatform(url);
-  if (platform === 'other') {
-    throw new Error('Bu bağlantıyı tanıyamadım. YouTube ya da Instagram bağlantısı yapıştır.');
+  let response: Response;
+  try {
+    response = await fetch('/api/info?url=' + encodeURIComponent(url));
+  } catch {
+    throw new Error(NETWORK_ERROR);
   }
-
-  const short = platform === 'instagram' || url.includes('/shorts/');
-
-  return {
-    id: 'mock-1',
-    platform,
-    title: short ? 'Kısa video başlığı burada görünür' : 'Video başlığı burada görünür',
-    author: platform === 'instagram' ? '@hesapadi' : '@kanaladi',
-    durationSeconds: short ? 58 : 754,
-    thumbnailUrl: null,
-    thumbnailWidth: 1280,
-    thumbnailHeight: 720,
-    sourceLabel: short ? '1080x1920 kaynak' : '1080p60 kaynak',
-    hasSubtitles: platform === 'youtube',
-    video: short
-      ? [
-          { id: '1080p', label: '1080p', sub: 'Full HD · MP4', sizeBytes: 25_165_824, ext: 'mp4' },
-          { id: '720p', label: '720p', sub: 'HD · MP4', sizeBytes: 13_631_488, ext: 'mp4' },
-          { id: '480p', label: '480p', sub: 'Veri dostu · MP4', sizeBytes: 7_340_032, ext: 'mp4' },
-        ]
-      : [
-          { id: '2160p', label: '2160p', sub: '4K · MP4 (H.264 + AAC)', sizeBytes: 1_503_238_553, ext: 'mp4' },
-          { id: '1440p', label: '1440p', sub: '2K · MP4 (H.264 + AAC)', sizeBytes: 754_974_720, ext: 'mp4' },
-          { id: '1080p', label: '1080p', sub: 'Full HD · 60 fps', sizeBytes: 155_189_248, ext: 'mp4' },
-          { id: '720p', label: '720p', sub: 'HD · 30 fps', sizeBytes: 77_594_624, ext: 'mp4' },
-          { id: '480p', label: '480p', sub: 'Veri dostu', sizeBytes: 39_845_888, ext: 'mp4' },
-        ],
-    // MP3'te kalite seçimi yok: her zaman en yüksek kalite (320 kbps) iner.
-    audio: [{ id: '320', label: '320 kbps', sub: 'MP3 · en yüksek kalite', sizeBytes: 29_360_128, ext: 'mp3' }],
-  };
+  if (!response.ok) throw new Error(await readError(response));
+  return response.json();
 }
 
-export async function requestDownload(request: DownloadRequest): Promise<DownloadTicket> {
-  await delay(MOCK_DELAY_MS);
+export function downloadHref(info: MediaInfo, format: MediaFormat, options: AudioOptions): string {
+  const params = new URLSearchParams({ url: info.url, format: format.id });
+  if (format.kind === 'audio') {
+    if (options.cover) params.set('cover', '1');
+    if (options.tags) params.set('tags', '1');
+  }
+  return '/api/download?' + params.toString();
+}
 
-  const ext = request.mode === 'audio' ? 'mp3' : 'mp4';
-  return {
-    downloadUrl: '#',
-    filename: 'indirilen-dosya-' + request.qualityId + '.' + ext,
-  };
+export type DownloadResult = 'saved' | 'handed-off' | 'cancelled';
+
+interface DownloadArgs {
+  info: MediaInfo;
+  format: MediaFormat;
+  options: AudioOptions;
+  signal: AbortSignal;
+  /** Akış başladığında ve her parçada çağrılır. */
+  onProgress: (received: number, estimated: number) => void;
 }
 
 /*
-  Gercek arka uc baglandiginda govdeler soyle olur:
+  Üç katmanlı indirme, sırayla:
 
-  export async function fetchMediaInfo(url: string): Promise<MediaInfo> {
-    const response = await fetch('/api/info?url=' + encodeURIComponent(url));
-    if (!response.ok) throw new Error('Video bilgisi alınamadı.');
-    return response.json();
-  }
+  1. showSaveFilePicker varsa: konum sorulur, akış doğrudan diske yazılır.
+     RAM'de birikme yok, ilerleme gösterilir.
+  2. Yoksa ve dosya < 250 MB ise: akış okunur, ilerleme gösterilir, parçalar
+     Blob'da toplanıp kaydedilir. Brave bu API'yi varsayılan olarak kapatıyor,
+     Firefox ve Safari'de hiç yok — kullanıcıların çoğu buraya düşer.
+  3. Diğer durumlarda: tarayıcının kendi indiricisine devredilir.
 
-  export async function requestDownload(request: DownloadRequest): Promise<DownloadTicket> {
-    const response = await fetch('/api/download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    });
-    if (!response.ok) throw new Error('İndirme başlatılamadı.');
-    return response.json();
-  }
+  ÖNEMLİ: Bu fonksiyon tıklama işleyicisinden doğrudan, arada hiçbir await
+  olmadan çağrılmalı. showSaveFilePicker aşağıda ilk await'ten önce çağrılıyor;
+  önce fetch beklenirse tarayıcı "user activation" süresini aşar ve picker açılmaz.
 */
+export async function startDownload({ info, format, options, signal, onProgress }: DownloadArgs): Promise<DownloadResult> {
+  const href = downloadHref(info, format, options);
+  const ext = format.kind === 'audio' ? 'mp3' : 'mp4';
+  const filename = safeFilename(info.title, ext);
+
+  // --- 1. katman ------------------------------------------------------------
+  if (typeof window.showSaveFilePicker === 'function') {
+    // await'ten önce: user activation henüz geçerli.
+    const picking = window.showSaveFilePicker({
+      suggestedName: filename,
+      startIn: 'downloads',
+      types: [
+        ext === 'mp3'
+          ? { description: 'MP3 ses', accept: { 'audio/mpeg': ['.mp3'] } }
+          : { description: 'MP4 video', accept: { 'video/mp4': ['.mp4'] } },
+      ],
+    });
+
+    let handle: FileSystemFileHandle;
+    try {
+      handle = await picking;
+    } catch (error) {
+      // Kullanıcı iptal etti: sessizce çık.
+      if (error instanceof DOMException && error.name === 'AbortError') return 'cancelled';
+      throw error;
+    }
+
+    const response = await request(href, signal);
+    const writable = await handle.createWritable();
+    try {
+      await pump(response, format, signal, onProgress, (chunk) => writable.write(chunk));
+      await writable.close();
+    } catch (error) {
+      await writable.abort().catch(() => undefined);
+      throw error;
+    }
+    return 'saved';
+  }
+
+  // --- 2. katman ------------------------------------------------------------
+  if (format.estimatedBytes < BLOB_LIMIT) {
+    const response = await request(href, signal);
+    const parts: BlobPart[] = [];
+    await pump(response, format, signal, onProgress, (chunk) => {
+      parts.push(chunk);
+    });
+
+    const blob = new Blob(parts, { type: ext === 'mp3' ? 'audio/mpeg' : 'video/mp4' });
+    const objectUrl = URL.createObjectURL(blob);
+    clickLink(objectUrl, filename);
+    // Tıklamadan hemen sonra iptal edilirse bazı tarayıcılar indirmeyi başlatmıyor.
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000);
+    return 'saved';
+  }
+
+  // --- 3. katman ------------------------------------------------------------
+  // Büyük dosya ve API yok: tarayıcının kendi göstergesi kullanılsın.
+  clickLink(href, filename);
+  return 'handed-off';
+}
+
+async function request(href: string, signal: AbortSignal): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(href, { signal, cache: 'no-store' });
+  } catch (error) {
+    if (signal.aborted) throw error;
+    throw new Error(NETWORK_ERROR);
+  }
+  if (!response.ok || !response.body) throw new Error(await readError(response));
+  return response;
+}
+
+/** Akışı okur, baytları sayar. Akış yarıda koparsa hata yükseltir. */
+async function pump(
+  response: Response,
+  format: MediaFormat,
+  signal: AbortSignal,
+  onProgress: (received: number, estimated: number) => void,
+  write: (chunk: Uint8Array<ArrayBuffer>) => unknown,
+): Promise<void> {
+  const header = Number(response.headers.get('X-Estimated-Bytes'));
+  const estimated = header > 0 ? header : format.estimatedBytes;
+  const reader = (response.body as ReadableStream<Uint8Array<ArrayBuffer>>).getReader();
+  let received = 0;
+  onProgress(0, estimated);
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      await write(value);
+      received += value.byteLength;
+      onProgress(received, estimated);
+    }
+  } catch (error) {
+    if (signal.aborted) throw error;
+    // Sunucu 200 döndükten sonra akışı kesti (ffmpeg hatası, limit aşımı):
+    // yarım dosya başarılı sayılmaz.
+    throw new Error(STREAM_BROKEN);
+  }
+
+  if (received === 0) throw new Error(STREAM_BROKEN);
+}
+
+function clickLink(href: string, filename: string) {
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = filename;
+  link.rel = 'noopener';
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}

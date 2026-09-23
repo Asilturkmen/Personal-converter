@@ -1,20 +1,37 @@
-import type { FormEvent } from 'react';
+import type { ClipboardEvent, FormEvent } from 'react';
 import { ArrowRightIcon, ClipboardIcon, LinkIcon, SpinnerIcon } from './Icons';
 import { useClipboardPaste } from '../hooks/useClipboardPaste';
 
 interface Props {
   value: string;
   onChange: (value: string) => void;
-  onSubmit: () => void;
+  /** Getir'e basınca ya da bir bağlantı yapıştırılınca çağrılır. */
+  onSubmit: (url: string) => void;
   loading: boolean;
 }
 
 export default function UrlInput({ value, onChange, onSubmit, loading }: Props) {
-  const { paste, denied } = useClipboardPaste(onChange);
+  const { paste, denied } = useClipboardPaste((text) => {
+    onChange(text);
+    if (!loading) onSubmit(text);
+  });
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!loading && value.trim()) onSubmit();
+    if (!loading && value.trim()) onSubmit(value.trim());
+  }
+
+  // Kutu boşken ya da tamamı seçiliyken yapıştırılan bağlantı hemen getirilir.
+  // Var olan metnin ortasına yapıştırma (düzeltme) normal davranır.
+  function handlePaste(event: ClipboardEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const replacesAll = input.selectionStart === 0 && input.selectionEnd === input.value.length;
+    const text = event.clipboardData.getData('text').trim();
+    if (!replacesAll || !text || loading) return;
+
+    event.preventDefault();
+    onChange(text);
+    onSubmit(text);
   }
 
   return (
@@ -36,6 +53,7 @@ export default function UrlInput({ value, onChange, onSubmit, loading }: Props) 
           spellCheck={false}
           value={value}
           onChange={(event) => onChange(event.target.value)}
+          onPaste={handlePaste}
           placeholder="Bağlantıyı buraya yapıştır"
           className="h-11 min-w-0 grow bg-transparent text-[15px] font-medium text-ink outline-none placeholder:text-muted sm:text-base"
         />
@@ -61,8 +79,8 @@ export default function UrlInput({ value, onChange, onSubmit, loading }: Props) 
       </form>
 
       {denied && (
-        <p className="mt-2 text-[13px] font-medium text-muted">
-          Tarayıcı pano erişimine izin vermedi. Bağlantıyı elle yapıştırabilirsin.
+        <p role="alert" className="mt-2 text-[13px] font-medium text-muted">
+          Tarayıcı pano erişimine izin vermedi. Bağlantıyı kutuya elle yapıştır (Ctrl+V ya da uzun bas → Yapıştır).
         </p>
       )}
     </div>

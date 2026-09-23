@@ -16,7 +16,7 @@ export default function DownloadButton({ label, busy, disabled, onClick }: Props
       className="mt-v24 flex h-[var(--h-action)] w-full items-center justify-center gap-2.5 rounded-[16px] bg-accent text-base font-bold text-white transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50"
     >
       {busy ? <SpinnerIcon /> : <DownloadIcon />}
-      {busy ? 'Hazırlanıyor…' : label}
+      {busy ? 'İndiriliyor…' : label}
     </button>
   );
 }

@@ -120,6 +120,35 @@ export function WideVideoIcon({ className = 'h-[18px] w-[18px]' }: IconProps) {
   );
 }
 
+export function CheckIcon({ className = 'h-[18px] w-[18px]' }: IconProps) {
+  return (
+    <svg className={base + ' ' + className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M5 12.5l4.5 4.5L19 7.5" />
+    </svg>
+  );
+}
+
+export function AlertIcon({ className = 'h-[18px] w-[18px]' }: IconProps) {
+  return (
+    <svg className={base + ' ' + className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7.5v5.5" />
+      <path d="M12 16.5h.01" />
+    </svg>
+  );
+}
+
+export function RetryIcon({ className = 'h-4 w-4' }: IconProps) {
+  return (
+    <svg className={base + ' ' + className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.7" />
+      <path d="M20 4v4.7h-4.7" />
+      <path d="M20 12a8 8 0 0 1-13.7 5.6L4 15.3" />
+      <path d="M4 20v-4.7h4.7" />
+    </svg>
+  );
+}
+
 export function SpinnerIcon({ className = 'h-[18px] w-[18px]' }: IconProps) {
   return (
     <svg className={base + ' ' + className + ' animate-spin'} viewBox="0 0 24 24" fill="none" aria-hidden="true">

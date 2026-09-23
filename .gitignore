@@ -4,3 +4,9 @@ dist
 *.local
 .env
 tsconfig.tsbuildinfo
+
+# backend
+.venv
+__pycache__
+*.pyc
+cookies.txt

@@ -1,0 +1,172 @@
+"""ffmpeg: CDN'den okur, stdout'a yazar. Diske hiçbir şey dokunmaz.
+
+Neden asyncio.create_subprocess_exec değil de subprocess.Popen?
+  Windows'ta uvicorn (özellikle --reload ile) SelectorEventLoop kullanır ve
+  asyncio'nun alt süreç API'si orada NotImplementedError fırlatır. Popen her
+  olay döngüsünde ve her platformda çalışır; bloklayan stdout okumaları
+  anyio'nun thread havuzunda yapılır, event loop hiç bloklanmaz.
+"""
+
+from __future__ import annotations
+
+import collections
+import logging
+import subprocess
+import threading
+import time
+from dataclasses import dataclass
+
+import config
+from media import Choice, Stream
+
+log = logging.getLogger('converter.stream')
+
+CHUNK_SIZE = 64 * 1024
+
+RECONNECT = ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5']
+FRAGMENTED_MP4 = ['-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4']
+
+
+class StreamFailed(Exception):
+    """Akış yarıda kesildi. Yanıt gövdesi temiz kapanmasın diye yükseltilir;
+    istemci böylece yarım dosyayı başarılı saymaz."""
+
+
+def _input_args(stream: Stream, relay_url: str | None) -> list[str]:
+    if relay_url:
+        # Loopback köprüsü: CDN başlıkları ve yeniden deneme relay.py'de.
+        return ['-i', relay_url]
+    args = list(RECONNECT)
+    if stream.headers:
+        # ffmpeg her başlığın CRLF ile bitmesini bekliyor.
+        joined = ''.join(f'{key}: {value}\r\n' for key, value in stream.headers.items())
+        args += ['-headers', joined]
+    return args + ['-i', stream.url]
+
+
+def build_command(choice: Choice, *, relay_urls: list[str | None] | None = None) -> list[str]:
+    """relay_urls[i] doluysa i. girdi CDN yerine o adresten okunur."""
+    relays = relay_urls or [None] * len(choice.inputs)
+    cmd = [config.FFMPEG_PATH, '-hide_banner', '-loglevel', 'error', '-nostats']
+
+    if choice.kind == 'video':
+        cmd.append('-nostdin')
+        for stream, relay_url in zip(choice.inputs, relays):
+            cmd += _input_args(stream, relay_url)
+        if len(choice.inputs) == 2:
+            cmd += ['-map', '0:v:0', '-map', '1:a:0']
+        else:
+            # Instagram çoğunlukla tek parça: video+ses aynı akışta.
+            cmd += ['-map', '0:v:0', '-map', '0:a:0?']
+        # Yeniden kodlama yok: yalnızca kapsayıcı değişiyor.
+        cmd += ['-c', 'copy']
+        if choice.inputs[-1].hls_aac:
+            cmd += ['-bsf:a', 'aac_adtstoasc']
+        return cmd + FRAGMENTED_MP4 + ['pipe:1']
+
+    # MP3: etiketsiz ham akış. ID3 etiketi (başlık, sanatçı, kapak) tags.py'de
+    # bellekte üretilip akışın başına eklenir; ffmpeg pipe'a yazarken etiket
+    # boyutunu dolduramıyor.
+    cmd.append('-nostdin')
+    cmd += _input_args(choice.inputs[0], relays[0])
+    cmd += ['-map', '0:a:0', '-vn', '-map_metadata', '-1']
+    # VBR ~190 kbps. Kaynak ~130 kbps opus; daha yüksek bitrate kalite katmaz.
+    return cmd + ['-c:a', 'libmp3lame', '-q:a', '2', '-write_id3v2', '0', '-write_xing', '0', '-f', 'mp3', 'pipe:1']
+
+
+@dataclass
+class _Tail:
+    """ffmpeg stderr'inin son satırları; hata olursa log'a basılır."""
+    lines: collections.deque
+
+    def text(self) -> str:
+        return ' | '.join(self.lines)
+
+
+class FFmpegStream:
+    def __init__(self, cmd: list[str]):
+        self.cmd = cmd
+        self.proc: subprocess.Popen | None = None
+        self.bytes_sent = 0
+        self.started_at = time.monotonic()
+        self._stderr = _Tail(collections.deque(maxlen=20))
+        self._killed_reason: str | None = None
+        self._watchdog: threading.Timer | None = None
+
+    def start(self) -> None:
+        self.proc = subprocess.Popen(
+            self.cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        threading.Thread(target=self._drain_stderr, daemon=True).start()
+
+        # Zaman aşımı: akış bitmemişse süreç öldürülür, okuma döngüsü de
+        # EOF alıp çıkar.
+        self._watchdog = threading.Timer(config.DOWNLOAD_TIMEOUT_SECONDS, self.kill, args=('zaman aşımı',))
+        self._watchdog.daemon = True
+        self._watchdog.start()
+
+    def _drain_stderr(self) -> None:
+        assert self.proc and self.proc.stderr
+        for raw in self.proc.stderr:
+            line = raw.decode('utf-8', 'replace').strip()
+            if line:
+                self._stderr.lines.append(line)
+
+    def read(self) -> bytes:
+        """Bloklayan okuma; thread havuzunda çağrılır. b'' = akış bitti."""
+        assert self.proc and self.proc.stdout
+        try:
+            chunk = self.proc.stdout.read(CHUNK_SIZE)
+        except (OSError, ValueError):
+            return b''
+        if chunk:
+            self.bytes_sent += len(chunk)
+            if self.bytes_sent > config.MAX_BYTES:
+                self.kill('boyut sınırı aşıldı')
+        return chunk or b''
+
+    def kill(self, reason: str = 'iptal') -> None:
+        if self.proc and self.proc.poll() is None:
+            self._killed_reason = self._killed_reason or reason
+            try:
+                # Her iki platformda çalışır; platforma özel sinyal yok.
+                self.proc.kill()
+            except OSError:
+                pass
+
+    def finish(self) -> None:
+        """Akış sonunda çağrılır: çıkış kodunu kontrol eder, başarısızsa
+        StreamFailed yükseltir."""
+        assert self.proc
+        try:
+            code = self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.kill('kapanmadı')
+            code = self.proc.wait()
+        if self._killed_reason or code != 0:
+            reason = self._killed_reason or f'ffmpeg çıkış kodu {code}'
+            log.warning('akış başarısız (%s, %d bayt): %s', reason, self.bytes_sent, self._stderr.text())
+            raise StreamFailed(reason)
+
+    def close(self) -> None:
+        """Her durumda (istemci koptu, hata, başarı) çağrılır."""
+        if self._watchdog:
+            self._watchdog.cancel()
+        self.kill('istemci bağlantıyı kapattı')
+        if self.proc:
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            for pipe in (self.proc.stdout, self.proc.stderr):
+                try:
+                    pipe and pipe.close()
+                except OSError:
+                    pass
+
+    def error_text(self) -> str:
+        return self._stderr.text()

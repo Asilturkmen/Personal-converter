@@ -1,45 +1,46 @@
-export type Platform = 'youtube' | 'instagram' | 'other';
+export type Platform = 'youtube' | 'instagram';
 
 export type Mode = 'video' | 'audio';
 
-/** Tek bir indirilebilir varyant: 1080p MP4 ya da 320 kbps MP3. */
-export interface QualityOption {
+/** Backend'in hazırladığı tek bir indirilebilir seçenek: "v720" ya da "mp3". */
+export interface MediaFormat {
   id: string;
   label: string;
-  /** Satırın altındaki açıklama: "Full HD · 60 fps" gibi. */
-  sub: string;
-  /** Tahmini dosya boyutu. Bilinmiyorsa null. */
-  sizeBytes: number | null;
-  ext: 'mp4' | 'mp3';
+  kind: Mode;
+  /** İlerleme çubuğu için tahmini boyut (bayt). */
+  estimatedBytes: number;
+  /** Yalnızca video: kısa kenara göre çözünürlük (dikey 1080x1920 → 1080). */
+  height?: number;
+  fps?: number | null;
+  codec?: string | null;
 }
 
-/** Bir bağlantıyı çözdükten sonra arka ucun döndüğü bilgi. */
+/** GET /api/info yanıtı. */
 export interface MediaInfo {
-  id: string;
-  platform: Platform;
-  title: string;
-  author: string;
-  durationSeconds: number;
-  /** Kapak görselinin adresi. Yoksa arayüz yer tutucu gösterir. */
-  thumbnailUrl: string | null;
-  thumbnailWidth: number | null;
-  thumbnailHeight: number | null;
-  sourceLabel: string;
-  hasSubtitles: boolean;
-  video: QualityOption[];
-  audio: QualityOption[];
-}
-
-export interface DownloadRequest {
   url: string;
-  mode: Mode;
-  qualityId: string;
-  subtitles: boolean;
-  cover: boolean;
+  source: Platform;
+  title: string;
+  uploader: string;
+  /** Saniye. Bilinmiyorsa 0. */
+  duration: number;
+  /** Aynı origin'deki kapak adresi (/api/thumbnail?...). Yoksa null. */
+  thumbnail: string | null;
+  /** Kaynak videonun en büyük karesi; dikey mi yatay mı buradan anlaşılır. */
+  width: number | null;
+  height: number | null;
+  formats: MediaFormat[];
 }
 
-export interface DownloadTicket {
-  /** Tarayıcının açacağı dosya adresi. */
-  downloadUrl: string;
-  filename: string;
+/** Yalnızca MP3 için anlamlı seçenekler. */
+export interface AudioOptions {
+  cover: boolean;
+  tags: boolean;
 }
+
+export type DownloadState =
+  | { phase: 'idle' }
+  | { phase: 'starting' }
+  | { phase: 'streaming'; received: number; estimated: number }
+  | { phase: 'done'; received: number }
+  | { phase: 'handed-off' }
+  | { phase: 'error'; message: string };
