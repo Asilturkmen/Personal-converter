@@ -1,29 +1,35 @@
-import { formatBytes } from '../lib/format';
-import type { QualityOption } from '../types';
+import { formatEstimate, qualityNote } from '../lib/format';
+import type { MediaFormat } from '../types';
 
 interface Props {
-  options: QualityOption[];
+  formats: MediaFormat[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   legend: string;
+  disabled?: boolean;
 }
 
-export default function QualityList({ options, selectedId, onSelect, legend }: Props) {
+function subLabel(format: MediaFormat): string {
+  if (format.kind === 'audio') return '~190 kbps · en iyi ses kaynağından';
+  return qualityNote(format.height, format.fps, format.codec) || 'MP4';
+}
+
+export default function QualityList({ formats, selectedId, onSelect, legend, disabled = false }: Props) {
   return (
-    <fieldset className="mt-v24 border-0 p-0">
+    <fieldset className="mt-v24 border-0 p-0" disabled={disabled}>
       <div className="flex items-baseline justify-between">
         <legend className="float-left text-xs font-bold uppercase tracking-[0.09em] text-muted">{legend}</legend>
         <span className="text-[13px] font-medium text-muted">tahmini boyut</span>
       </div>
 
       <div className="mt-v10 overflow-hidden rounded-card border border-line bg-surface shadow-soft">
-        {options.map((option, index) => {
-          const selected = option.id === selectedId;
-          const last = index === options.length - 1;
+        {formats.map((format, index) => {
+          const selected = format.id === selectedId;
+          const last = index === formats.length - 1;
 
           return (
             <label
-              key={option.id}
+              key={format.id}
               className={
                 'flex h-[var(--h-row)] cursor-pointer items-center justify-between px-[18px] transition-colors focus-within:outline-2 focus-within:outline-offset-[-2px] focus-within:outline-accent ' +
                 (last ? '' : 'border-b border-line-soft ') +
@@ -33,19 +39,19 @@ export default function QualityList({ options, selectedId, onSelect, legend }: P
               <input
                 type="radio"
                 name="quality"
-                value={option.id}
+                value={format.id}
                 checked={selected}
-                onChange={() => onSelect(option.id)}
+                onChange={() => onSelect(format.id)}
                 className="sr-only"
               />
 
               <span className="flex flex-col gap-0.5">
-                <span className="text-[15px] font-bold">{option.label}</span>
-                <span className="text-[12.5px] font-medium text-muted">{option.sub}</span>
+                <span className="text-[15px] font-bold">{format.label}</span>
+                <span className="text-[12.5px] font-medium text-muted">{subLabel(format)}</span>
               </span>
 
               <span className="flex items-center gap-4">
-                <span className="text-[13px] font-semibold text-muted">{formatBytes(option.sizeBytes)}</span>
+                <span className="text-[13px] font-semibold text-muted">{formatEstimate(format.estimatedBytes)}</span>
                 <span
                   aria-hidden="true"
                   className={
