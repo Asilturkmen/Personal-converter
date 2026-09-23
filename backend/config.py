@@ -42,9 +42,33 @@ MAX_CONCURRENT_DOWNLOADS = _int('MAX_CONCURRENT_DOWNLOADS', 3)
 MAX_CONCURRENT_INFO = _int('MAX_CONCURRENT_INFO', 2)
 # 0 = sınırsız (yük testi için geçici olarak kapatmak istersen).
 MAX_DOWNLOADS_PER_IP = _int('MAX_DOWNLOADS_PER_IP', 1)
+# Link çözümleme (önbellekte olmayanlar) için IP başına sınırlar. Bunlar
+# olmadan tek kişi iki info slotunu sürekli dolu tutup herkese 503 yaşatabilir.
+MAX_INFO_PER_IP = _int('MAX_INFO_PER_IP', 1)
+INFO_PER_MINUTE_PER_IP = _int('INFO_PER_MINUTE_PER_IP', 20)
+
+# /api/download/prepare ile ayrılan ama indirilmeyen yer bu süre sonunda boşalır.
+RESERVATION_TTL_SECONDS = _int('RESERVATION_TTL_SECONDS', 30)
 
 CACHE_TTL_SECONDS = _int('CACHE_TTL_MINUTES', 25) * 60
 CACHE_MAX_ENTRIES = _int('CACHE_MAX_ENTRIES', 200)
+THUMBNAIL_CACHE_MEGABYTES = _int('THUMBNAIL_CACHE_MEGABYTES', 32)
+
+# Carousel gönderilerde yt-dlp'nin çözümleyeceği en fazla girdi.
+PLAYLIST_LIMIT = _int('PLAYLIST_LIMIT', 10)
+
+# Sabit bit hızı: akışla üretilen MP3'e VBR süre başlığı (Xing) yazılamıyor,
+# CBR'de ise oynatıcılar süreyi ve konumu bit hızından doğru hesaplar.
+MP3_BITRATE_KBPS = _int('MP3_BITRATE_KBPS', 192)
+
+# --- Sunucu (serve.py) ---------------------------------------------------
+HOST = os.getenv('HOST', '127.0.0.1')
+PORT = _int('PORT', 8000)
+# X-Forwarded-For'a yalnızca bu adreslerden (reverse proxy) gelen isteklerde
+# güvenilir; uvicorn'un kendi ProxyHeadersMiddleware'i uygular (zinciri sağdan
+# sola yürür, CIDR destekler). Varsayılan uvicorn'unkiyle aynı: yalnızca
+# localhost. nginx başka bir makinedeyse onun adresi yazılmalı.
+FORWARDED_ALLOW_IPS = os.getenv('FORWARDED_ALLOW_IPS', '127.0.0.1,::1')
 
 # Göreli yol backend/ klasörüne göre çözülür; uvicorn nereden başlatılırsa
 # başlatılsın aynı dosyayı bulur.

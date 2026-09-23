@@ -1,5 +1,5 @@
 import { AlertIcon, CheckIcon, RetryIcon } from './Icons';
-import { formatBytes, formatProgress } from '../lib/format';
+import { formatBytes, formatEstimate, formatProgress } from '../lib/format';
 import type { DownloadState } from '../types';
 
 interface Props {
@@ -9,9 +9,11 @@ interface Props {
 }
 
 /*
-  Yüzde tahmini boyuttan hesaplanır ve tahmin tutmayabilir: akış bitene
-  kadar %99'da sabitlenir, bitince %100'e atlar. Gerçek bayt tahmini aşarsa
-  çubuk geri sarmaz — sadece %99'da bekler.
+  Yüzde yalnızca boyut kesin biliniyorsa gösterilir (kaynağın bildirdiği
+  dosya boyutu). Yine de küçük sapmalar olabilir: akış bitene kadar %99'da
+  sabitlenir, bitince %100'e atlar; gerçek bayt tahmini aşarsa çubuk geri
+  sarmaz. Tahmin yaklaşıksa (HLS tepe bit hızı) ya da hiç yoksa yüzde
+  yanıltıcı olur; çubuk belirsiz modda kayar, yalnızca inen miktar yazılır.
 */
 function percentOf(received: number, estimated: number): number {
   if (estimated <= 0) return 0;
@@ -24,21 +26,26 @@ export default function DownloadStatus({ state, onRetry, onCancel }: Props) {
   if (state.phase === 'idle') return null;
 
   if (state.phase === 'starting' || state.phase === 'streaming') {
-    const received = state.phase === 'streaming' ? state.received : 0;
-    const estimated = state.phase === 'streaming' ? state.estimated : 0;
-    const percent = percentOf(received, estimated);
+    const streaming = state.phase === 'streaming';
+    const received = streaming ? state.received : 0;
+    const estimated = streaming ? state.estimated : 0;
+    const determinate = streaming && state.exact;
+    const percent = determinate ? percentOf(received, estimated) : 0;
+
+    const title = !streaming ? 'Hazırlanıyor…' : determinate ? 'İndiriliyor · %' + percent : 'İndiriliyor';
+    const detail = !streaming
+      ? 'kaynak açılıyor'
+      : determinate
+        ? formatProgress(received, Math.max(estimated, received))
+        : formatBytes(received) + (estimated > 0 ? ' · tahmini ' + formatEstimate(estimated) : '');
 
     return (
       <div className={panel} role="status" aria-live="polite">
         {/* Tek satır + çubuk: panel 925 px ekranda sayfayı taşırmasın. */}
         <div className="flex items-baseline justify-between gap-3">
-          <span className="text-sm font-bold">
-            {state.phase === 'starting' ? 'Hazırlanıyor…' : 'İndiriliyor · %' + percent}
-          </span>
-          <span className="flex items-baseline gap-3 text-[13px] font-medium text-muted">
-            <span className="truncate">
-              {state.phase === 'starting' ? 'kaynak açılıyor' : formatProgress(received, Math.max(estimated, received))}
-            </span>
+          <span className="text-sm font-bold">{title}</span>
+          <span className="flex min-w-0 items-baseline gap-3 text-[13px] font-medium text-muted">
+            <span className="truncate">{detail}</span>
             <button type="button" onClick={onCancel} className="shrink-0 font-semibold underline-offset-4 hover:text-ink hover:underline">
               İptal et
             </button>
@@ -50,12 +57,14 @@ export default function DownloadStatus({ state, onRetry, onCancel }: Props) {
           role="progressbar"
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={percent}
+          aria-valuenow={determinate ? percent : undefined}
+          aria-valuetext={determinate ? undefined : detail}
         >
-          <div
-            className={'h-full rounded-full bg-accent transition-[width] duration-300 ' + (state.phase === 'starting' ? 'w-1/4 animate-pulse' : '')}
-            style={state.phase === 'streaming' ? { width: percent + '%' } : undefined}
-          />
+          {determinate ? (
+            <div className="h-full rounded-full bg-accent transition-[width] duration-300" style={{ width: percent + '%' }} />
+          ) : (
+            <div className="h-full w-1/4 rounded-full bg-accent motion-safe:animate-indeterminate" />
+          )}
         </div>
       </div>
     );

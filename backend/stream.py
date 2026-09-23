@@ -23,7 +23,17 @@ log = logging.getLogger('converter.stream')
 
 CHUNK_SIZE = 64 * 1024
 
-RECONNECT = ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5']
+# Kaynak koparsa yeniden bağlan, ama sonsuza kadar değil: aksi hâlde ölü bir
+# kaynak indirmeyi 15 dakikalık zaman aşımına kadar asılı tutar.
+# rw_timeout: 30 sn hiç veri gelmezse G/Ç hatası (mikrosaniye).
+IO_TIMEOUT = ['-rw_timeout', '30000000']
+RECONNECT = ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5',
+             '-reconnect_max_retries', '5', *IO_TIMEOUT]
+
+# ffmpeg yarıda kesilen bir girdiyi bu mesajlarla bildirip yine de 0 ile
+# çıkabiliyor (ölçüldü: %40'ı verilmiş girdi → "partial file", çıkış kodu 0).
+# -loglevel error altında görünen bu satırlar kesinti sayılır.
+TRUNCATION_MARKERS = ('partial file', 'prematurely', 'i/o error', 'connection reset', 'error during demuxing')
 FRAGMENTED_MP4 = ['-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4']
 
 
@@ -35,7 +45,7 @@ class StreamFailed(Exception):
 def _input_args(stream: Stream, relay_url: str | None) -> list[str]:
     if relay_url:
         # Loopback köprüsü: CDN başlıkları ve yeniden deneme relay.py'de.
-        return ['-i', relay_url]
+        return [*IO_TIMEOUT, '-i', relay_url]
     args = list(RECONNECT)
     if stream.headers:
         # ffmpeg her başlığın CRLF ile bitmesini bekliyor.
@@ -70,8 +80,12 @@ def build_command(choice: Choice, *, relay_urls: list[str | None] | None = None)
     cmd.append('-nostdin')
     cmd += _input_args(choice.inputs[0], relays[0])
     cmd += ['-map', '0:a:0', '-vn', '-map_metadata', '-1']
-    # VBR ~190 kbps. Kaynak ~130 kbps opus; daha yüksek bitrate kalite katmaz.
-    return cmd + ['-c:a', 'libmp3lame', '-q:a', '2', '-write_id3v2', '0', '-write_xing', '0', '-f', 'mp3', 'pipe:1']
+    # Sabit bit hızı (varsayılan 192 kbps). VBR'nin süre başlığı (Xing) dosya
+    # bitince geriye dönülerek yazılır; pipe'ta bu mümkün değil ve oynatıcılar
+    # süreyi yanlış gösterir. CBR'de süre ve konum bit hızından tam hesaplanır.
+    # Kaynak ~130 kbps opus/AAC olduğu için daha yüksek bit hızı kalite katmaz.
+    return cmd + ['-c:a', 'libmp3lame', '-b:a', f'{config.MP3_BITRATE_KBPS}k',
+                  '-write_id3v2', '0', '-write_xing', '0', '-f', 'mp3', 'pipe:1']
 
 
 @dataclass
@@ -92,6 +106,7 @@ class FFmpegStream:
         self._stderr = _Tail(collections.deque(maxlen=20))
         self._killed_reason: str | None = None
         self._watchdog: threading.Timer | None = None
+        self._stderr_thread: threading.Thread | None = None
 
     def start(self) -> None:
         self.proc = subprocess.Popen(
@@ -101,7 +116,8 @@ class FFmpegStream:
             stderr=subprocess.PIPE,
             bufsize=0,
         )
-        threading.Thread(target=self._drain_stderr, daemon=True).start()
+        self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stderr_thread.start()
 
         # Zaman aşımı: akış bitmemişse süreç öldürülür, okuma döngüsü de
         # EOF alıp çıkar.
@@ -147,8 +163,13 @@ class FFmpegStream:
         except subprocess.TimeoutExpired:
             self.kill('kapanmadı')
             code = self.proc.wait()
-        if self._killed_reason or code != 0:
-            reason = self._killed_reason or f'ffmpeg çıkış kodu {code}'
+        # stderr'in son satırları okunmadan karar verilmesin.
+        if self._stderr_thread:
+            self._stderr_thread.join(timeout=5)
+        stderr = self._stderr.text().lower()
+        truncated = next((marker for marker in TRUNCATION_MARKERS if marker in stderr), None)
+        if self._killed_reason or code != 0 or truncated:
+            reason = self._killed_reason or (f'girdi eksik ({truncated})' if truncated else f'ffmpeg çıkış kodu {code}')
             log.warning('akış başarısız (%s, %d bayt): %s', reason, self.bytes_sent, self._stderr.text())
             raise StreamFailed(reason)
 
