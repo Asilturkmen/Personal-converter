@@ -145,6 +145,8 @@ class Choice:
         }
         if self.kind == 'video':
             data.update(height=self.height, fps=self.fps, codec=self.codec)
+        else:
+            data['bitrate'] = config.MP3_BITRATE_KBPS
         return data
 
 
@@ -155,8 +157,10 @@ class Media:
     title: str
     uploader: str
     duration: int
-    thumbnail: str | None
-    thumbnail_headers: dict[str, str]
+    # Kapak adayları, en iyiden kötüye. yt-dlp adresleri doğrulamaz; en
+    # öncelikli aday (ör. maxresdefault.webp) çoğu videoda 404 döner.
+    # thumbnails.py sağlam olanı bulana kadar sırayla dener.
+    thumbnails: list[tuple[str, dict[str, str]]]
     width: int | None
     height: int | None
     choices: dict[str, Choice] = field(default_factory=dict)
@@ -170,7 +174,7 @@ class Media:
             'duration': self.duration,
             # Meta CDN'i görselleri başka origin'e göstermiyor (CORP); kapak
             # bu yüzden backend üzerinden, bellekte geçirilerek sunuluyor.
-            'thumbnail': '/api/thumbnail?url=' + quote(self.url, safe='') if self.thumbnail else None,
+            'thumbnail': '/api/thumbnail?url=' + quote(self.url, safe='') if self.thumbnails else None,
             'width': self.width,
             'height': self.height,
             'formats': [choice.public() for choice in self.choices.values()],
@@ -199,6 +203,10 @@ class InfoCache:
                 return None
             self._items.move_to_end(key)
             return media
+
+    def drop(self, key: str) -> None:
+        with self._lock:
+            self._items.pop(key, None)
 
     def put(self, key: str, media: Media) -> None:
         with self._lock:
@@ -508,16 +516,13 @@ def _build_media(url: str, platform: str, info: dict, duration: int) -> Media:
         biggest = max(videos, key=lambda f: (f.get('width') or 0) * (f.get('height') or 0))
         width, height = biggest.get('width'), biggest.get('height')
 
-    thumbnail, thumbnail_headers = _pick_thumbnail(info)
-
     return Media(
         url=url,
         source=platform,
         title=_title(info, platform),
         uploader=(info.get('uploader') or info.get('channel') or info.get('uploader_id') or '').strip(),
         duration=duration,
-        thumbnail=thumbnail,
-        thumbnail_headers=thumbnail_headers,
+        thumbnails=_thumbnail_candidates(info),
         width=width,
         height=height,
         choices=choices,
@@ -549,20 +554,24 @@ def _probe_duration(f: dict) -> int:
         return 0
 
 
-def _pick_thumbnail(info: dict) -> tuple[str | None, dict[str, str]]:
-    """JPEG tercih edilir: MP3 kapağına gömülürken en uyumlu biçim."""
+THUMBNAIL_CANDIDATES = 6
+
+
+def _thumbnail_candidates(info: dict) -> list[tuple[str, dict[str, str]]]:
+    """En iyiden kötüye kapak adayları. Eşit öncelikte JPEG önde: MP3
+    kapağına gömülürken dönüştürme gerekmez."""
     thumbs = [t for t in info.get('thumbnails') or [] if t.get('url')]
     if not thumbs:
         url = info.get('thumbnail')
-        return (url, {}) if url else (None, {})
+        return [(url, {})] if url else []
 
     def rank(t: dict) -> tuple:
         is_jpeg = '.jpg' in t['url'] or '.jpeg' in t['url']
         area = (t.get('width') or 0) * (t.get('height') or 0)
         return (t.get('preference') or 0, is_jpeg, area)
 
-    best = max(thumbs, key=rank)
-    return best['url'], dict(best.get('http_headers') or {})
+    ordered = sorted(thumbs, key=rank, reverse=True)[:THUMBNAIL_CANDIDATES]
+    return [(t['url'], dict(t.get('http_headers') or {})) for t in ordered]
 
 
 def resolve(url: str) -> Media:

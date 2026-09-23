@@ -76,27 +76,38 @@ _cache = ThumbnailCache(config.THUMBNAIL_CACHE_MEGABYTES * 1024 * 1024, config.C
 
 
 async def get(client: httpx.AsyncClient, item: Media) -> Thumbnail | None:
-    if not item.thumbnail:
-        return None
     key = cache_key(item.url)
     cached = _cache.get(key)
     if cached is not None:
         return cached
+    # yt-dlp'nin adayları doğrulanmamış adreslerdir; sağlam olan bulunana
+    # kadar sırayla denenir (ör. maxresdefault.webp 404 → maxresdefault.jpg).
+    for url, headers in item.thumbnails:
+        thumb = await _fetch(client, url, headers)
+        if thumb is not None:
+            _cache.put(key, thumb)
+            return thumb
+    if item.thumbnails:
+        log.info('kapak alınamadı: %d adayın hiçbiri açılmadı (%s)', len(item.thumbnails), item.url)
+    return None
+
+
+async def _fetch(client: httpx.AsyncClient, url: str, headers: dict[str, str]) -> Thumbnail | None:
     try:
-        async with client.stream('GET', item.thumbnail, headers=item.thumbnail_headers) as response:
-            response.raise_for_status()
+        async with client.stream('GET', url, headers=headers) as response:
+            if response.status_code != 200:
+                return None
+            content_type = response.headers.get('content-type', 'image/jpeg').split(';')[0].strip()
+            if not content_type.startswith('image/'):
+                return None
             data = bytearray()
             async for chunk in response.aiter_bytes():
                 data += chunk
                 if len(data) > MAX_IMAGE_BYTES:
                     return None
-            content_type = response.headers.get('content-type', 'image/jpeg').split(';')[0].strip()
-    except httpx.HTTPError as error:
-        log.info('kapak alınamadı: %s', error)
+    except httpx.HTTPError:
         return None
-    thumb = Thumbnail(bytes(data), content_type)
-    _cache.put(key, thumb)
-    return thumb
+    return Thumbnail(bytes(data), content_type)
 
 
 async def jpeg(client: httpx.AsyncClient, item: Media) -> bytes | None:

@@ -18,6 +18,8 @@ export interface MediaFormat {
   height?: number;
   fps?: number | null;
   codec?: string | null;
+  /** Yalnızca MP3: sabit bit hızı (kbps). */
+  bitrate?: number;
 }
 
 /** GET /api/info yanıtı. */
