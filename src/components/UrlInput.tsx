@@ -1,5 +1,5 @@
 import type { ClipboardEvent, FormEvent } from 'react';
-import { ArrowRightIcon, ClipboardIcon, LinkIcon, SpinnerIcon } from './Icons';
+import { ArrowRightIcon, ClipboardIcon, CloseIcon, LinkIcon, SpinnerIcon } from './Icons';
 import { useClipboardPaste } from '../hooks/useClipboardPaste';
 
 interface Props {
@@ -8,9 +8,13 @@ interface Props {
   /** Getir'e basınca ya da bir bağlantı yapıştırılınca çağrılır. */
   onSubmit: (url: string) => void;
   loading: boolean;
+  /** Verilirse "Temizle" butonu görünür: sayfayı ilk açılış hâline döndürür. */
+  onClear?: () => void;
+  /** İndirme sürerken temizleme kapalı; inen dosya yanlışlıkla kaybolmasın. */
+  clearDisabled?: boolean;
 }
 
-export default function UrlInput({ value, onChange, onSubmit, loading }: Props) {
+export default function UrlInput({ value, onChange, onSubmit, loading, onClear, clearDisabled = false }: Props) {
   const { paste, denied } = useClipboardPaste((text) => {
     onChange(text);
     if (!loading) onSubmit(text);
@@ -57,6 +61,20 @@ export default function UrlInput({ value, onChange, onSubmit, loading }: Props) 
           placeholder="Bağlantıyı buraya yapıştır"
           className="h-11 min-w-0 grow bg-transparent text-[15px] font-medium text-ink outline-none placeholder:text-muted sm:text-base"
         />
+
+        {onClear && (
+          <button
+            type="button"
+            onClick={onClear}
+            disabled={clearDisabled}
+            aria-label="Temizle"
+            title={clearDisabled ? 'İndirme sürerken temizlenemez. Önce iptal et.' : 'Temizle ve baştan başla'}
+            className="flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-[11px] px-2.5 text-sm font-semibold text-muted transition-colors hover:bg-surface-2 hover:text-ink disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted sm:px-3"
+          >
+            <CloseIcon />
+            <span className="hidden sm:inline">Temizle</span>
+          </button>
+        )}
 
         <button
           type="button"

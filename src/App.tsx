@@ -30,6 +30,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const lastRequest = useRef(0);
+  const [inputKey, setInputKey] = useState(0);
 
   const [mode, setMode] = useState<Mode>('video');
   const [videoId, setVideoId] = useState<string | null>(null);
@@ -123,6 +124,25 @@ export default function App() {
     abortRef.current?.abort();
   }
 
+  // Sayfayı ilk açılış hâline döndürür. İndirme sürerken çağrılmaz (buton pasif).
+  function handleClear() {
+    if (downloading) return;
+    lastRequest.current += 1; // yolda olan bir getirme varsa sonucu yok sayılsın
+    setUrl('');
+    setInfo(null);
+    setLoading(false);
+    setFetchError(null);
+    setMode('video');
+    setVideoId(null);
+    setAudioOptions({ cover: true, tags: true });
+    setDownload({ phase: 'idle' });
+    // UrlInput yeniden kurulur: "pano izni verilmedi" uyarısı da temizlenir.
+    setInputKey((key) => key + 1);
+    requestAnimationFrame(() => document.getElementById('media-url')?.focus());
+  }
+
+  const canClear = url.trim() !== '' || info !== null || fetchError !== null || loading;
+
   const downloadLabel = selected ? selected.label + ' indir' : 'İndir';
 
   return (
@@ -138,7 +158,15 @@ export default function App() {
         </p>
 
         <div className="mt-v24">
-          <UrlInput value={url} onChange={setUrl} onSubmit={handleFetch} loading={loading} />
+          <UrlInput
+            key={inputKey}
+            value={url}
+            onChange={setUrl}
+            onSubmit={handleFetch}
+            loading={loading}
+            onClear={canClear ? handleClear : undefined}
+            clearDisabled={downloading}
+          />
         </div>
 
         {loading ? (
