@@ -10,6 +10,7 @@ Sunucunun diskine hiçbir zaman hiçbir dosya yazılmaz.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import shutil
 import sys
@@ -94,6 +95,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        downloads.release_pending()
         await app.state.relay.stop()
         await app.state.http.aclose()
 
@@ -117,14 +119,27 @@ async def unexpected_error_handler(request: Request, error: Exception):
 # --------------------------------------------------------------------------
 
 def client_ip(request: Request) -> str:
-    """Gerçek istemci IP'si.
+    """Sınırların ve biletlerin bağlandığı istemci anahtarı.
 
     Reverse proxy arkasında request.client, uvicorn'un ProxyHeadersMiddleware'i
     tarafından X-Forwarded-For'dan çözülmüş hâliyle gelir; başlığa yalnızca
     FORWARDED_ALLOW_IPS'teki adreslerden gelen isteklerde güvenilir (bkz.
     config.py, serve.py). Burada ikinci bir ayrıştırma yapılmaz: iki ayrı
-    mekanizma birbirinin kararını ezer."""
-    return request.client.host if request.client else 'unknown'
+    mekanizma birbirinin kararını ezer.
+
+    IPv6'da tek bir bağlantı (ev, telefon) bütün bir /64 bloğu alır ve içinden
+    istediği kadar adres üretebilir; adres başına sınır böyle kolayca aşılırdı.
+    Bu yüzden IPv6 istemciler /64 bloğuyla sayılır."""
+    host = request.client.host if request.client else 'unknown'
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped:
+            return str(address.ipv4_mapped)
+        return str(ipaddress.IPv6Network((address, 64), strict=False))
+    return host
 
 
 _inflight: dict[str, asyncio.Future] = {}
@@ -171,21 +186,6 @@ async def get_media(url: str, ip: str, fresh: bool = False) -> Media:
         info_ip_slots.release(ip)
 
 
-async def _prepare(request: Request, url: str, format_id: str, cover: bool, tags: bool) -> downloads.Reservation:
-    url = media.validate_url(url)
-    ip = client_ip(request)
-    http = request.app.state.http
-    return await downloads.prepare(
-        ip=ip,
-        format_id=format_id,
-        cover=cover,
-        tags=tags,
-        relay=request.app.state.relay,
-        load_media=lambda fresh: get_media(url, ip, fresh=fresh),
-        load_cover=lambda item: thumbnails.jpeg(http, item),
-    )
-
-
 # --------------------------------------------------------------------------
 # API
 # --------------------------------------------------------------------------
@@ -225,7 +225,18 @@ class PrepareRequest(BaseModel):
 async def prepare_download(request: Request, body: PrepareRequest):
     """Yer ayırır ve ffmpeg'i başlatır; hata varsa dosya indirmesi başlamadan
     JSON olarak döner. Başarılıysa kısa ömürlü bir bilet verir."""
-    reservation = await _prepare(request, body.url, body.format, body.cover, body.tags)
+    url = media.validate_url(body.url)
+    ip = client_ip(request)
+    http = request.app.state.http
+    reservation = await downloads.prepare(
+        ip=ip,
+        format_id=body.format,
+        cover=body.cover,
+        tags=body.tags,
+        relay=request.app.state.relay,
+        load_media=lambda fresh: get_media(url, ip, fresh=fresh),
+        load_cover=lambda item: thumbnails.jpeg(http, item),
+    )
     # İstemci beklerken vazgeçtiyse (iptal, sekme kapandı) yer hemen boşalsın;
     # TTL'i beklemesin.
     if await request.is_disconnected():
@@ -240,20 +251,14 @@ async def prepare_download(request: Request, body: PrepareRequest):
 
 
 @app.get('/api/download')
-async def download(
-    request: Request,
-    ticket: str = '',
-    url: str = '',
-    format: str = '',
-    cover: bool = False,
-    tags: bool = False,
-):
-    """Dosyayı akıtır. `ticket` (prepare'den) ya da doğrudan `url` + `format`."""
-    if ticket:
-        reservation = downloads.consume(ticket, client_ip(request))
-    else:
-        reservation = await _prepare(request, url, format, cover, tags)
-        downloads.consume(reservation.ticket, reservation.ip)
+async def download(request: Request, ticket: str = ''):
+    """Bileti (prepare'den) tüketir ve dosyayı akıtır.
+
+    Biletsiz, tek adımlı bir indirme adresi bilerek yok: öyle bir adres başka
+    sitelerden düz bir bağlantıyla kullanılabilir ve sunucunun bant genişliği
+    onların indirme butonuna dönüşür. Bileti almak JSON gövdeli bir POST
+    gerektirir; tarayıcı bunu başka bir origin'den CORS izni olmadan göndermez."""
+    reservation = downloads.consume(ticket, client_ip(request))
     return downloads.response(reservation)
 
 

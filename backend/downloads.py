@@ -37,7 +37,7 @@ from limits import PerKeySlots, Slots
 from media import Choice, Media, UserError
 from names import content_disposition, safe_filename
 from relay import RelayServer, RelayTicket
-from stream import FFmpegStream, StreamFailed, build_command
+from stream import FFmpegStream, StreamFailed, build_command, time_limit
 from tags import id3_tag
 
 log = logging.getLogger('converter.downloads')
@@ -185,7 +185,10 @@ async def _start(
             cover=await load_cover(item) if cover else None,
         )
 
-    reservation.proc = FFmpegStream(build_command(choice, relay_urls=relay_urls))
+    reservation.proc = FFmpegStream(
+        build_command(choice, relay_urls=relay_urls),
+        max_seconds=time_limit(choice.estimated_bytes),
+    )
     reservation.proc.start()
 
     # İlk bayt gelmeden bilet verilmez: ffmpeg kaynağı açamazsa kullanıcı
@@ -214,6 +217,12 @@ def consume(ticket: str, ip: str) -> Reservation:
     if reservation.expiry:
         reservation.expiry.cancel()
     return reservation
+
+
+def release_pending() -> None:
+    """Kapanışta: tüketilmemiş biletlerin ffmpeg'i ve relay'i beklemeden kapansın."""
+    for reservation in list(_pending.values()):
+        reservation.release()
 
 
 def cancel(ticket: str, ip: str) -> None:

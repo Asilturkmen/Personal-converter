@@ -151,8 +151,11 @@ export async function startDownload({ info, format, options, signal, onProgress 
         throw error;
       }
 
-      // Picker dosyayı seçildiği anda oluşturur. Bundan sonraki her hata ya da
-      // iptal, geride boş/yarım bir dosya bırakmamalı.
+      // Picker yeni bir adı seçildiği anda boş bir dosya olarak oluşturur.
+      // Bundan sonraki her hata ya da iptal, geride bu boş dosyayı bırakmamalı.
+      // Kullanıcı var olan bir dosyanın üzerine yazmayı seçtiyse ona dokunulmaz:
+      // createWritable geçici bir kopyaya yazar, abort() eski içeriği korur.
+      const created = await isEmpty(handle);
       try {
         const response = await open();
         const writable = await handle.createWritable();
@@ -164,7 +167,7 @@ export async function startDownload({ info, format, options, signal, onProgress 
           throw error;
         }
       } catch (error) {
-        await removeFile(handle);
+        if (created) await removeFile(handle);
         throw error;
       }
       return 'saved';
@@ -196,6 +199,15 @@ export async function startDownload({ info, format, options, signal, onProgress 
     return 'handed-off';
   } finally {
     signal.removeEventListener('abort', onAbort);
+  }
+}
+
+/** Boş dosya = picker'ın az önce oluşturduğu. Okunamazsa silinmez (güvenli taraf). */
+async function isEmpty(handle: FileSystemFileHandle): Promise<boolean> {
+  try {
+    return (await handle.getFile()).size === 0;
+  } catch {
+    return false;
   }
 }
 

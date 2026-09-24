@@ -67,7 +67,23 @@ def validate_url(raw: str) -> str:
         raise UserError('Oynatma listeleri ve kanallar desteklenmiyor. Tek bir videonun bağlantısını yapıştır.')
     if platform_of(url) == 'instagram' and not key.startswith(('ig:', 'igs:')):
         raise UserError('Instagram\'da bir gönderinin, reel\'in ya da hikâyenin bağlantısını yapıştır; profil bağlantıları desteklenmiyor.')
-    return url
+    return canonical_url(key)
+
+
+def canonical_url(key: str) -> str:
+    """Anahtardan yeniden kurulan, parametresiz bağlantı.
+
+    Kullanıcının yapıştırdığı adres hiçbir yere taşınmaz: `?si=` (YouTube) ve
+    `?igsh=` (Instagram) paylaşanı tanımlayan izlerdir, önbellekteki kayıt
+    aynı videoyu açan herkese döner. yt-dlp'ye, önbelleğe ve arayüze giden
+    tek adres budur."""
+    kind, _, rest = key.partition(':')
+    if kind == 'yt':
+        return 'https://www.youtube.com/watch?v=' + rest
+    if kind == 'ig':
+        return f'https://www.instagram.com/p/{rest}/'
+    user, _, story_id = rest.partition(':')
+    return f'https://www.instagram.com/stories/{user}/' + (story_id + '/' if story_id else '')
 
 
 def platform_of(url: str) -> str:
@@ -286,12 +302,7 @@ def extract(url: str) -> Media:
     if info.get('is_live') or info.get('live_status') in ('is_live', 'is_upcoming'):
         raise UserError('Canlı yayınlar desteklenmiyor.', 422)
 
-    duration = int(info.get('duration') or 0)
-    if duration > config.MAX_DURATION_SECONDS:
-        limit = config.MAX_DURATION_SECONDS // 60
-        raise UserError(f'Video çok uzun. En fazla {limit} dakikalık videolar indirilebilir.', 422)
-
-    return _build_media(url, platform, info, duration)
+    return _build_media(url, platform, info, int(info.get('duration') or 0))
 
 
 def _has_video(entry: dict) -> bool:
@@ -419,6 +430,11 @@ def _build_media(url: str, platform: str, info: dict, duration: int) -> Media:
         # Instagram çerezsiz modda süre vermiyor; boyut tahmini ve MP3 için gerekli.
         probe = (audio_only or videos or [None])[0]
         duration = _probe_duration(probe) if probe else 0
+
+    # Süre ölçülerek bulunduysa da sınır geçerli.
+    if duration > config.MAX_DURATION_SECONDS:
+        limit = config.MAX_DURATION_SECONDS // 60
+        raise UserError(f'Video çok uzun. En fazla {limit} dakikalık videolar indirilebilir.', 422)
 
     # Video ile birleştirilecek ses: -c copy ile mp4'e girebilmesi için
     # önce AAC (m4a), yoksa en iyi ses.
