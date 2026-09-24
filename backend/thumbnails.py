@@ -21,6 +21,9 @@ from tags import to_jpeg
 log = logging.getLogger('converter.thumbnails')
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
+# Kapaklar bizim origin'imizden sunuluyor; SVG gibi betik taşıyabilen türler
+# hiç kabul edilmez. YouTube jpeg/webp, Instagram jpeg veriyor.
+IMAGE_TYPES = frozenset({'image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif'})
 
 
 class Thumbnail:
@@ -97,8 +100,10 @@ async def _fetch(client: httpx.AsyncClient, url: str, headers: dict[str, str]) -
         async with client.stream('GET', url, headers=headers) as response:
             if response.status_code != 200:
                 return None
-            content_type = response.headers.get('content-type', 'image/jpeg').split(';')[0].strip()
-            if not content_type.startswith('image/'):
+            content_type = response.headers.get('content-type', 'image/jpeg').split(';')[0].strip().lower()
+            if content_type == 'image/jpg':  # standart dışı ama görülen yazım
+                content_type = 'image/jpeg'
+            if content_type not in IMAGE_TYPES:
                 return None
             data = bytearray()
             async for chunk in response.aiter_bytes():

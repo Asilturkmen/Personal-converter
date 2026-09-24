@@ -39,6 +39,11 @@ log = logging.getLogger('converter.relay')
 RETRIES = 3
 DEFAULT_CHUNK = 10 * 1024 * 1024
 READ_SIZE = 64 * 1024
+# CDN bir parçanın ortasında bu kadar susarsa parça kaldığı yerden yeniden
+# istenir. ffmpeg relay girdisinde 30 sn veri gelmezse vazgeçiyor
+# (stream.IO_TIMEOUT); yeniden deneme ancak ondan önce devreye girerse işe yarar
+# (ölçüldü: 35 sn susan bir parçada 30 sn → indirme başarısız, 10 sn → tamamlandı).
+CHUNK_TIMEOUT = httpx.Timeout(10.0)
 
 
 @dataclass(eq=False)
@@ -106,19 +111,26 @@ class RelayServer:
             return
 
         size = ticket.stream.filesize
-        # Content-Length biliniyorsa gönderilir: ffmpeg de erken kesintiyi
-        # ayrıca fark eder. Range desteği yok ve duyurulmuyor; ffmpeg akışı
+        # Gövdenin nerede bittiği ffmpeg'e her zaman söylenir: boyut biliniyorsa
+        # Content-Length, bilinmiyorsa chunked. İkisi de yoksa ffmpeg bağlantının
+        # kapanmasını "Stream ends prematurely" diye hata sayıyor ve eksiksiz
+        # inen dosya %100'de başarısız görünüyordu (ölçüldü: YouTube itag 18,
+        # boyutu bildirilmiyor). Range desteği yok ve duyurulmuyor; ffmpeg akışı
         # baştan sona tek seferde okur.
         headers = 'HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n'
-        if size:
-            headers += f'Content-Length: {size}\r\n'
+        headers += f'Content-Length: {size}\r\n' if size else 'Transfer-Encoding: chunked\r\n'
         writer.write((headers + '\r\n').encode('latin-1'))
 
         try:
             async for data in self._upstream(ticket):
-                writer.write(data)
+                if not data:
+                    continue  # chunked'da boş parça gövdenin sonu demek
+                writer.write(data if size else b'%x\r\n%b\r\n' % (len(data), data))
                 await writer.drain()
                 ticket.bytes_sent += len(data)
+            if not size:
+                writer.write(b'0\r\n\r\n')
+                await writer.drain()
             ticket.completed = True
         except (ConnectionError, _Abandoned):
             # ffmpeg bağlantıyı kapattı (öldürüldü ya da bitti) veya indirme iptal edildi.
@@ -147,7 +159,7 @@ class RelayServer:
             for attempt in range(1, RETRIES + 1):
                 try:
                     url = f'{stream.url}{separator}range={position + got}-{end}'
-                    async with self.client.stream('GET', url, headers=stream.headers) as response:
+                    async with self.client.stream('GET', url, headers=stream.headers, timeout=CHUNK_TIMEOUT) as response:
                         if response.status_code == 416:  # boyut bilinmiyordu, dosya tam bölündü
                             return
                         response.raise_for_status()

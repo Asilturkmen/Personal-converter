@@ -4,7 +4,8 @@
 
 Sunucunun diskine hiçbir zaman hiçbir dosya yazılmaz.
 
-Çalıştırma (backend/ klasöründe):  uvicorn app:app --port 8000
+Çalıştırma (backend/ klasöründe):  python serve.py
+(tek worker, .env ayarları, sınırlı kapanış süresi; bkz. serve.py)
 """
 
 from __future__ import annotations
@@ -14,15 +15,18 @@ import ipaddress
 import logging
 import shutil
 import sys
+import time
+from collections.abc import Awaitable
 from contextlib import asynccontextmanager
+from typing import TypeVar
 from urllib.parse import urljoin
 
+import anyio
 import httpx
 import yt_dlp
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
-from starlette.concurrency import run_in_threadpool
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 import config
@@ -51,6 +55,11 @@ info_ip_slots = PerKeySlots(config.MAX_INFO_PER_IP)
 info_rate = RateLimiter(config.INFO_PER_MINUTE_PER_IP)
 
 RATE_LIMITED = 'Kısa sürede çok fazla bağlantı getirdin. Bir dakika bekleyip tekrar dene.'
+# Normal bir çözümleme 2–5 sn; Instagram'da süre ölçümüyle (ffprobe) 20 sn'ye çıkabilir.
+RESOLVE_TIMEOUT_SECONDS = 90
+DISCONNECT_POLL_SECONDS = 0.5
+
+T = TypeVar('T')
 
 
 # --------------------------------------------------------------------------
@@ -141,7 +150,7 @@ class SameOriginOnly:
         await self.app(scope, receive, send)
 
 
-app = FastAPI(title='Asil Personal Converter', lifespan=lifespan, docs_url=None, redoc_url=None)
+app = FastAPI(title='Asil Personal Converter', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(SameOriginOnly)
 
 
@@ -184,12 +193,16 @@ def client_ip(request: Request) -> str:
     return host
 
 
-_inflight: dict[str, asyncio.Future] = {}
+_inflight: dict[str, asyncio.Task] = {}
 
 
 async def get_media(url: str, ip: str, fresh: bool = False) -> Media:
     """fresh=True: önbellekteki kayıt (ör. CDN adresleri 403 dönmeye başladıysa)
-    atılır ve video yeniden çözümlenir."""
+    atılır ve video yeniden çözümlenir.
+
+    Çözümleme isteği yapanın değil, ayrı bir görevin işidir: istek iptal edilse
+    de (kullanıcı prepare'i bıraktı) aynı videoyu bekleyen diğer istekler
+    etkilenmez, sonuç yine önbelleğe yazılır."""
     key = media.cache_key(url)
     if fresh:
         media.cache.drop(key)
@@ -198,34 +211,72 @@ async def get_media(url: str, ip: str, fresh: bool = False) -> Media:
         return cached
 
     # Aynı video zaten çözümleniyorsa onu bekle; ikinci bir slot harcama.
-    if key in _inflight:
-        return await asyncio.shield(_inflight[key])
+    task = _inflight.get(key)
+    if task is None:
+        # Sınırlar yalnızca gerçek çözümlemeye (önbellek ıskası) uygulanır.
+        if not info_rate.allow(ip):
+            raise UserError(RATE_LIMITED, 429)
+        if not info_ip_slots.try_acquire(ip):
+            raise UserError('Önceki bağlantın hâlâ çözümleniyor. Birkaç saniye bekleyip tekrar dene.', 429)
+        if not info_slots.try_acquire():
+            info_ip_slots.release(ip)
+            raise UserError(downloads.BUSY, 503)
+        task = asyncio.create_task(_resolve(url, key, ip))
+        # Bekleyen kalmadıysa "exception was never retrieved" uyarısı çıkmasın.
+        task.add_done_callback(lambda done: done.cancelled() or done.exception())
+        _inflight[key] = task
 
-    # Sınırlar yalnızca gerçek çözümlemeye (önbellek ıskası) uygulanır.
-    if not info_rate.allow(ip):
-        raise UserError(RATE_LIMITED, 429)
-    if not info_ip_slots.try_acquire(ip):
-        raise UserError('Önceki bağlantın hâlâ çözümleniyor. Birkaç saniye bekleyip tekrar dene.', 429)
-    if not info_slots.try_acquire():
-        info_ip_slots.release(ip)
-        raise UserError(downloads.BUSY, 503)
-
-    future: asyncio.Future = asyncio.get_running_loop().create_future()
-    _inflight[key] = future
+    # asyncio.wait bekleyen iptal edilse de görevi iptal etmez. shield de etmez,
+    # ama Python 3.13+ bekleyeni gitmiş görevin olağan hatalarını ("Video çok
+    # uzun") ERROR ve traceback ile logluyor.
     try:
-        # yt-dlp bloklayan bir kütüphane; JS runtime'ı da çalıştırdığı için
-        # iş başına 0.5–2 sn tam çekirdek harcar. Event loop'u tutmasın.
-        result = await run_in_threadpool(media.resolve, url)
-        future.set_result(result)
-        return result
-    except BaseException as error:
-        future.set_exception(error if isinstance(error, Exception) else UserError(downloads.BUSY, 503))
-        future.exception()  # bekleyen yoksa "never retrieved" uyarısı çıkmasın
-        raise
+        with anyio.fail_after(RESOLVE_TIMEOUT_SECONDS):
+            await asyncio.wait({task})
+    except TimeoutError:
+        log.warning('çözümleme %d sn içinde bitmedi: %s', RESOLVE_TIMEOUT_SECONDS, url)
+        raise UserError('Video bilgisi zamanında alınamadı. Biraz sonra tekrar dene.', 504) from None
+    return task.result()
+
+
+async def _resolve(url: str, key: str, ip: str) -> Media:
+    """yt-dlp bloklayan bir kütüphane; JS runtime'ı da çalıştırdığı için iş başına
+    0.5–2 sn tam çekirdek harcar, event loop'u tutmasın diye thread'de çalışır.
+
+    Slotlar thread gerçekten bitince bırakılır. yt-dlp'nin Deno çağrısının zaman
+    aşımı yok ve takılan bir thread durdurulamaz: bekleyen istek RESOLVE_TIMEOUT
+    sonra hata alır, ama slot dolu kalır. Aksi hâlde takılan her çözümleme bir
+    thread ve bir Deno süreci bırakıp yenisine yer açar, bellek sınırsız dolardı.
+    (abandon_on_cancel yalnızca kapanışta işe yarar; bu görevi başka kimse iptal
+    etmez.)"""
+    started = time.monotonic()
+    try:
+        return await anyio.to_thread.run_sync(media.resolve, url, abandon_on_cancel=True)
     finally:
         _inflight.pop(key, None)
         info_slots.release()
         info_ip_slots.release(ip)
+        elapsed = time.monotonic() - started
+        if elapsed > RESOLVE_TIMEOUT_SECONDS:
+            log.warning('çözümleme %.0f sn sonra bitti, slot şimdi boşaldı: %s', elapsed, url)
+
+
+async def unless_disconnected(request: Request, work: Awaitable[T]) -> T | None:
+    """İşi yürütür; istemci beklerken vazgeçerse (iptal, sekme kapandı) işi
+    iptal edip None döner. prepare'in beklemeleri (reklam süresi, ilk bayt,
+    taze çözümleme) böylece gitmiş bir istemci için dakikalarca yer tutmaz.
+    İptal güvenli: prepare hata ya da iptalde her şeyi kendisi bırakır."""
+    task = asyncio.ensure_future(work)
+    try:
+        while not task.done():
+            await asyncio.wait({task}, timeout=DISCONNECT_POLL_SECONDS)
+            if not task.done() and await request.is_disconnected():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                return None
+        return task.result()
+    except asyncio.CancelledError:
+        task.cancel()
+        raise
 
 
 async def open_share_link(http: httpx.AsyncClient, share: str, ip: str) -> str:
@@ -276,9 +327,10 @@ async def thumbnail(request: Request, url: str = '', download: bool = False):
     thumb = await thumbnails.get(request.app.state.http, item)
     if thumb is None:
         raise UserError('Kapak görseli alınamadı.', 404)
-    headers = {'Cache-Control': 'private, max-age=1800'}
+    # nosniff: görsel olarak işaretlenen yanıt başka bir türde yorumlanmasın.
+    headers = {'Cache-Control': 'private, max-age=1800', 'X-Content-Type-Options': 'nosniff'}
     if download:
-        ext = {'image/webp': 'webp', 'image/png': 'png'}.get(thumb.content_type, 'jpg')
+        ext = {'image/webp': 'webp', 'image/png': 'png', 'image/avif': 'avif', 'image/gif': 'gif'}.get(thumb.content_type, 'jpg')
         headers['Content-Disposition'] = content_disposition(safe_filename(item.title, ext))
     return Response(thumb.data, media_type=thumb.content_type, headers=headers)
 
@@ -297,7 +349,7 @@ async def prepare_download(request: Request, body: PrepareRequest):
     url = media.validate_url(body.url)
     ip = client_ip(request)
     http = request.app.state.http
-    reservation = await downloads.prepare(
+    reservation = await unless_disconnected(request, downloads.prepare(
         ip=ip,
         format_id=body.format,
         cover=body.cover,
@@ -305,11 +357,12 @@ async def prepare_download(request: Request, body: PrepareRequest):
         relay=request.app.state.relay,
         load_media=lambda fresh: get_media(url, ip, fresh=fresh),
         load_cover=lambda item: thumbnails.jpeg(http, item),
-    )
-    # İstemci beklerken vazgeçtiyse (iptal, sekme kapandı) yer hemen boşalsın;
-    # TTL'i beklemesin.
-    if await request.is_disconnected():
+    ))
+    # Son anda koptuysa da bilet kimseye verilmez; yer TTL'i beklemeden boşalır.
+    if reservation is not None and await request.is_disconnected():
         reservation.release()
+        reservation = None
+    if reservation is None:
         return Response(status_code=499)
     return {
         'ticket': reservation.ticket,

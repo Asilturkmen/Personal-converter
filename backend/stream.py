@@ -30,10 +30,20 @@ IO_TIMEOUT = ['-rw_timeout', '30000000']
 RECONNECT = ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5',
              '-reconnect_max_retries', '5', *IO_TIMEOUT]
 
-# ffmpeg yarıda kesilen bir girdiyi bu mesajlarla bildirip yine de 0 ile
+# ffmpeg -loglevel level+warning ile çalışır: her satır seviyesiyle gelir
+# ("[error]", "[warning]"). Hata satırlarında görünen bu mesajlar kesinti
+# sayılır; ffmpeg yarıda kesilen bir girdiyi bunlarla bildirip yine de 0 ile
 # çıkabiliyor (ölçüldü: %40'ı verilmiş girdi → "partial file", çıkış kodu 0).
-# -loglevel error altında görünen bu satırlar kesinti sayılır.
+# Uyarı satırlarında aranmaz: yeniden bağlanma uyarısı ("Will reconnect ...
+# error=I/O error") kesinti değildir.
 TRUNCATION_MARKERS = ('partial file', 'prematurely', 'i/o error', 'connection reset', 'error during demuxing')
+ERROR_LEVELS = ('[error]', '[fatal]', '[panic]')
+# HLS demuxer'ı açılamayan bir parçayı yalnızca uyarıyla atlayıp devam ediyor
+# ve 0 ile çıkıyor: dosyanın ortasından ya da sonundan birkaç saniye eksik
+# kalır (ölçüldü). Parça önce HLS_SEGMENT_RETRIES kez yeniden denenir; yine
+# açılmazsa bu uyarı yazılır ve kesinti sayılır.
+SKIPPED_SEGMENT_MARKER = 'failed too many times'
+HLS_SEGMENT_RETRIES = '3'
 # -map ile istenen akış girdide yok (ör. sessiz video → MP3). Yeniden denemek
 # sonucu değiştirmez.
 MISSING_STREAM_MARKER = 'matches no streams'
@@ -50,6 +60,9 @@ def _input_args(stream: Stream, relay_url: str | None) -> list[str]:
         # Loopback köprüsü: CDN başlıkları ve yeniden deneme relay.py'de.
         return [*IO_TIMEOUT, '-i', relay_url]
     args = list(RECONNECT)
+    if stream.hls:
+        # Yalnızca HLS demuxer'ının seçeneği; başka girdide ffmpeg hiç başlamaz.
+        args += ['-seg_max_retry', HLS_SEGMENT_RETRIES]
     if stream.headers:
         # ffmpeg her başlığın CRLF ile bitmesini bekliyor.
         joined = ''.join(f'{key}: {value}\r\n' for key, value in stream.headers.items())
@@ -60,7 +73,7 @@ def _input_args(stream: Stream, relay_url: str | None) -> list[str]:
 def build_command(choice: Choice, *, relay_urls: list[str | None] | None = None) -> list[str]:
     """relay_urls[i] doluysa i. girdi CDN yerine o adresten okunur."""
     relays = relay_urls or [None] * len(choice.inputs)
-    cmd = [config.FFMPEG_PATH, '-hide_banner', '-loglevel', 'error', '-nostats']
+    cmd = [config.FFMPEG_PATH, '-hide_banner', '-loglevel', 'level+warning', '-nostats']
 
     if choice.kind == 'video':
         cmd.append('-nostdin')
@@ -103,6 +116,16 @@ class _Tail:
 WATCH_INTERVAL = 5
 
 
+def truncation_in(line: str) -> str | None:
+    """stderr satırı girdinin eksik kaldığını söylüyorsa nedeni, değilse None."""
+    lowered = line.lower()
+    if any(level in lowered for level in ERROR_LEVELS):
+        return next((marker for marker in TRUNCATION_MARKERS if marker in lowered), None)
+    if '[warning]' in lowered and SKIPPED_SEGMENT_MARKER in lowered:
+        return 'HLS parçası atlandı'
+    return None
+
+
 def time_limit(estimated_bytes: int) -> float:
     """Üst süre: en az DOWNLOAD_TIMEOUT, büyük dosyada en düşük kabul edilen
     hızla inmesine yetecek kadar. Sabit bir süre yavaş bağlantıda büyük
@@ -119,6 +142,9 @@ class FFmpegStream:
         self.started_at = time.monotonic()
         self._last_data = self.started_at
         self._stderr = _Tail(collections.deque(maxlen=20))
+        # İlk kesinti işareti kalıcı olarak tutulur: son 20 satırda aranırsa
+        # sonradan gelen uyarılar onu kuyruktan itebilirdi.
+        self._truncated: str | None = None
         self._killed_reason: str | None = None
         self._closed = threading.Event()
         self._watchdog: threading.Thread | None = None
@@ -157,6 +183,8 @@ class FFmpegStream:
             line = raw.decode('utf-8', 'replace').strip()
             if line:
                 self._stderr.lines.append(line)
+                if self._truncated is None:
+                    self._truncated = truncation_in(line)
 
     def read(self) -> bytes:
         """Bloklayan okuma; thread havuzunda çağrılır. b'' = akış bitti."""
@@ -173,6 +201,10 @@ class FFmpegStream:
             if self.bytes_sent > config.MAX_BYTES:
                 self.kill('boyut sınırı aşıldı')
         return chunk or b''
+
+    def mark_active(self) -> None:
+        """Bilet kullanıldı: durma süresi istemcinin bağlandığı andan sayılsın."""
+        self._last_data = time.monotonic()
 
     def kill(self, reason: str = 'iptal') -> None:
         if self.proc and self.proc.poll() is None:
@@ -195,8 +227,7 @@ class FFmpegStream:
         # stderr'in son satırları okunmadan karar verilmesin.
         if self._stderr_thread:
             self._stderr_thread.join(timeout=5)
-        stderr = self._stderr.text().lower()
-        truncated = next((marker for marker in TRUNCATION_MARKERS if marker in stderr), None)
+        truncated = self._truncated
         if self._killed_reason or code != 0 or truncated:
             reason = self._killed_reason or (f'girdi eksik ({truncated})' if truncated else f'ffmpeg çıkış kodu {code}')
             log.warning('akış başarısız (%s, %d bayt): %s', reason, self.bytes_sent, self._stderr.text())

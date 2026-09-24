@@ -25,12 +25,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 import anyio
 from starlette.responses import StreamingResponse
-from starlette.types import Receive, Scope, Send
+from starlette.types import Message, Receive, Scope, Send
 
 import config
 from limits import PerKeySlots, Slots
@@ -44,6 +45,9 @@ log = logging.getLogger('converter.downloads')
 
 BUSY = 'Şu an yoğunluk var, birkaç saniye sonra tekrar dene.'
 FIRST_BYTE_TIMEOUT = 60
+# Reklam süresi bundan uzunsa fazlası beklenmez; kaynak açılmazsa olağan
+# yeniden deneme (taze çözümleme) devreye girer.
+MAX_AVAILABILITY_WAIT = 60
 # Tahmin yaklaşıksa (HLS tepe bit hızı) ön kontrol bu kadar tolerans tanır;
 # asıl koruma akış sırasındaki bayt sayacıdır.
 APPROX_TOLERANCE = 1.5
@@ -140,6 +144,7 @@ async def prepare(
                 raise UserError(f'Dosya çok büyük (sınır {megabytes} MB). Daha düşük bir çözünürlük seç.', 413)
 
             reservation.item, reservation.choice = item, choice
+            await _wait_until_available(choice)
             if await _start(reservation, cover=cover, tags=tags, load_cover=load_cover):
                 break
             reservation.stop_pipeline()
@@ -154,6 +159,16 @@ async def prepare(
     _pending[reservation.ticket] = reservation
     reservation.expiry = asyncio.get_running_loop().call_later(config.RESERVATION_TTL_SECONDS, _expire, reservation)
     return reservation
+
+
+async def _wait_until_available(choice: Choice) -> None:
+    """YouTube reklamlı videolarda akışı reklam süresi dolmadan vermiyor; yt-dlp
+    kendi indiricisinde bu yüzden bekliyor (bkz. media.Choice.available_at).
+    Çoğu zaman kullanıcı indire basana kadar süre zaten dolmuş olur."""
+    wait = choice.available_at - time.time()
+    if wait > 0:
+        log.info('kaynak %.0f sn sonra açılabilir (reklam süresi), bekleniyor', wait)
+        await asyncio.sleep(min(wait, MAX_AVAILABILITY_WAIT))
 
 
 async def _start(
@@ -224,6 +239,8 @@ def consume(ticket: str, ip: str) -> Reservation:
     reservation.consumed = True
     if reservation.expiry:
         reservation.expiry.cancel()
+    if reservation.proc:
+        reservation.proc.mark_active()
     return reservation
 
 
@@ -245,13 +262,22 @@ class _ManagedStreamingResponse(StreamingResponse):
         self._on_close = on_close
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        async def send_or_give_up(message: Message) -> None:
+            # İstemci bağlantıyı açık tutup okumayı bırakırsa gönderim sonsuza
+            # kadar bekler. ffmpeg'i durduran bekçi bunu çözmez: gövde yield'de
+            # asılı kalır ve yer bağlantı kapanana kadar dolu kalırdı (ölçüldü).
+            with anyio.fail_after(config.DOWNLOAD_STALL_SECONDS):
+                await send(message)
+
         try:
-            await super().__call__(scope, receive, send)
+            await super().__call__(scope, receive, send_or_give_up)
         except StreamFailed:
             # Nedeni stream/_check_relays zaten logladı. Yanıt tamamlanmadan
             # dönüldüğü için sunucu bağlantıyı son parçayı göndermeden kapatır;
             # istemci akışı eksik görür. Beklenen bir durum, traceback basılmaz.
             pass
+        except TimeoutError:
+            log.warning('istemci %d sn boyunca veri almadı, indirme kesildi', config.DOWNLOAD_STALL_SECONDS)
         finally:
             self._on_close()
 

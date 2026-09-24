@@ -16,7 +16,9 @@ ayarlanacağı. Kurulum ve kullanım için [README](../README.md)'ye bak.
 ## Ayarlar (.env)
 
 Hepsi isteğe bağlı. `backend/.env.example` dosyasını `backend/.env` olarak
-kopyalayıp değiştirmek istediğin satırları aç.
+kopyalayıp değiştirmek istediğin satırları aç. Geçersiz bir değer (sayı değil, sınır
+dışı; ör. `MIN_DOWNLOAD_KBPS=0`, `MP3_BITRATE_KBPS=500`) sunucuyu açılışta anlaşılır
+bir mesajla durdurur; çalışırken hataya yol açmaz.
 
 | Değişken | Varsayılan | |
 |---|---|---|
@@ -114,7 +116,11 @@ edilir; bazı telefonlar AV1'i açamıyor. Video ve ses ayrıysa ffmpeg iki gird
 `-c copy` ile birleştirir, **yeniden kodlama yok.** Çıktı parçalı mp4
 (`frag_keyframe+empty_moov+default_base_moof`), çünkü normal mp4 başına yazılacak
 `moov` için dosyanın sonunu bekler. MP3 tek seçenek: en iyi ses akışı
-`libmp3lame -b:a 192k` (sabit bit hızı).
+`libmp3lame -b:a 192k` (sabit bit hızı). DRM'li ("maybe" işaretli dahil) ve YouTube'un
+yapay zekâyla büyüttüğü (`-sr`) formatlar hiç listelenmez; yt-dlp'nin "possibly damaged"
+diye işaretlediği formatlar başka seçenek varsa seçilmez. YouTube reklamlı videolarda
+akışı reklam süresi dolmadan vermiyor; yt-dlp bu anı (`available_at`) format bilgisine
+yazıyor, `prepare` gerekirse o ana kadar (en fazla 60 sn) bekler.
 
 > **Neden VBR (`-q:a 2`) değil?** VBR MP3'te süre ve konum bilgisi dosyanın
 > başındaki Xing başlığında durur; ffmpeg onu dosya bitince geri dönüp yazar.
@@ -138,21 +144,40 @@ sırayla çekip ffmpeg'e tek akış olarak geçiriyor. Tamamen bellekte, adland�
 pipe gerektirmiyor, Windows ve Linux'ta aynı. Sonuç: hat hızında indirme ve bayt
 bayt doğru boyut tahmini. Her worker kendi relay'ini açar (token'ı kaydeden süreç ile
 ffmpeg'in bağlandığı süreç hep aynıdır), uvicorn unix socket'te dinlese de çalışır,
-yalnızca 127.0.0.1'e bağlı olduğu için dışarıdan hiçbir yolla erişilemez.
+yalnızca 127.0.0.1'e bağlı olduğu için dışarıdan hiçbir yolla erişilemez. CDN bir
+parçanın ortasında 10 sn susarsa parça kaldığı yerden yeniden istenir (en fazla 3
+deneme); bu süre ffmpeg'in relay girdisindeki 30 sn'lik zaman aşımından kısa olmak
+zorunda, yoksa yeniden deneme hiç devreye giremez (ölçüldü). Relay gövdenin nerede
+bittiğini ffmpeg'e her zaman söyler: boyut biliniyorsa `Content-Length`, bilinmiyorsa
+`Transfer-Encoding: chunked`. İkisi de olmayınca ffmpeg bağlantının kapanmasını hata
+sayıyor ve boyutu bildirilmeyen formatlar (YouTube'un birleşik 360p'si, itag 18) eksiksiz
+inse bile %100'de "yarıda kesildi" oluyordu.
 
 **Bütünlük.** ffmpeg yarıda kesilen bir http girdisini "partial file" uyarısıyla
 geçip **çıkış kodu 0** ile bitirebiliyor (ölçüldü). Bu yüzden iki kontrol var:
 relay her girdinin son baytına kadar teslim edildiğini kaydeder; ffmpeg'in
-stderr'indeki kesinti uyarıları da hata sayılır. İkisinden biri tutarsa akış
+stderr'indeki kesinti hataları da hata sayılır. İkisinden biri tutarsa akış
 temiz kapatılmaz, tarayıcı dosyayı eksik görür ve arayüz "İndirme yarıda kesildi"
-der. CDN'den doğrudan okunan girdilerde ffmpeg en fazla 5 kez yeniden bağlanır ve
+der. HLS (m3u8) girdilerinde ffmpeg açılamayan bir parçayı yalnızca uyarıyla atlayıp
+0 ile çıkıyor (ölçüldü: ortadan ya da sondan birkaç saniye eksik dosya "tamam"). Bu
+yüzden parça 3 kez yeniden denenir (`-seg_max_retry`), yine açılmazsa "failed too many
+times" uyarısı kesinti sayılır. ffmpeg `-loglevel level+warning` ile çalışır; kesinti
+mesajları yalnızca `[error]` satırlarında aranır, yeniden bağlanma uyarıları hata sayılmaz. CDN'den doğrudan okunan girdilerde ffmpeg en fazla 5 kez yeniden bağlanır ve
 30 sn veri gelmezse vazgeçer; ölü bir kaynak indirmeyi asılı tutmaz.
 
 **Süre sınırları.** Sabit bir süre yavaş bağlantıda büyük dosyayı yarıda keserdi
 (1 GB'lık dosya 15 dakikada ancak 1,1 MB/sn ile iner). Bu yüzden iki kural var: üst
 süre dosya boyutuyla uzar (boyut ÷ 256 KB/sn, en az 15 dk; 1 GB ≈ 68 dk) ve
-120 sn boyunca tek bayt akmazsa indirme kesilir. İlerleyen bir indirme yalnızca üst
-süreye takılır; takılan ya da okunmayan bir indirme yer tutmaz.
+120 sn boyunca tek bayt akmazsa indirme kesilir. Bu iki yönde de geçerli: kaynak
+durursa ffmpeg öldürülür; istemci bağlantıyı açık tutup okumayı bırakırsa (disk dolu,
+takılan sekme) tek bir parça 120 sn gönderilemediğinde bağlantı bırakılır. İlerleyen
+bir indirme yalnızca üst süreye takılır; takılan ya da okunmayan bir indirme yer tutmaz.
+Bağlantı çözümlemede bekleme 90 sn ile sınırlı: yt-dlp'nin Deno çağrısının kendi zaman
+aşımı yok. Kullanıcı 90 sn sonra "zamanında alınamadı" görür; çözümleme slotu ise thread
+gerçekten bitene kadar dolu kalır. Takılan bir thread durdurulamıyor; slot erken
+boşaltılsaydı takılan her çözümleme bir thread ve bir Deno süreci bırakıp yenisine yer
+açar, bellek sınırsız dolardı. Çözümleme isteği yapanın değil ayrı bir görevin işidir:
+istek iptal edilse de aynı videoyu bekleyen diğer istekler etkilenmez.
 
 **MP3 etiketleri.** ffmpeg pipe'a yazarken ID3 etiketinin boyut alanını dolduramıyor
 (sona gelip geri dönmesi gerekir), boyut 0 kalınca oynatıcılar kapağı ve başlığı
@@ -172,7 +197,9 @@ aday (ör. `maxresdefault.webp`) birçok videoda 404 döner. En iyiden kötüye 
 aday sırayla denenir, ilk sağlam olan bellekte önbelleğe alınır. Büyük kapaklar yalnızca
 yeterince yüksek çözünürlükte yüklenmiş videolarda var; eski ve düşük çözünürlüklü
 videolarda ilk 6 adayın hepsi 404 döner. YouTube'da bu yüzden her videoda bulunan
-`hqdefault.jpg` (480×360) her zaman son yedek olarak denenir.
+`hqdefault.jpg` (480×360) her zaman son yedek olarak denenir. Kapaklar bu sitenin
+adresinden sunulduğu için yalnızca jpeg, png, webp, avif ve gif kabul edilir (SVG gibi
+betik taşıyabilen türler hiç), yanıt `X-Content-Type-Options: nosniff` ile gider.
 
 **Sınırlar.** Canlı yayınlar reddedilir (sonu olmayan akış slotu sonsuza kadar kilitler).
 Boyut sınırı hem tahminle (tahmin yaklaşıksa 1,5× toleransla) hem akış sırasında gerçek
@@ -195,7 +222,10 @@ her hata dosya indirilmeye başlamadan arayüzde gösterilir.
    dosyaya yazılır, RAM'de birikmez. Picker tıklamadan hemen sonra, herhangi bir
    `await`'ten önce açılır; iptal edilirse sessizce çıkılır. Picker dosyayı seçildiği
    anda oluşturduğu için sonraki her hata ya da iptalde dosya silinir; geride boş
-   veya yarım dosya kalmaz.
+   veya yarım dosya kalmaz. Dosya sunucuda yer ayrılmadan yazmaya açılır; diske
+   yazılamazsa (disk dolu) akış hemen kapatılır, yer boşalır ve arayüz "Dosya
+   kaydedilemedi" der. Pencere hiç açılamazsa (iframe, kurumsal politika) 2. ve 3.
+   katmana geçilir.
 2. **Yoksa ve dosya Blob sınırının altındaysa** (Brave varsayılanda, Firefox, Safari,
    Android Chrome): akış okunur, ilerleme gösterilir, parçalar Blob'da toplanıp
    kaydedilir. Sınır cihaza göre: `navigator.deviceMemory` varsa GB × 32 MB

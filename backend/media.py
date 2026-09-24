@@ -147,6 +147,8 @@ class Stream:
     """ffmpeg'e verilecek tek bir girdi."""
     url: str
     headers: dict[str, str]
+    # m3u8 oynatma listesi; ffmpeg'in HLS demuxer'ı okur (bkz. stream._input_args).
+    hls: bool = False
     # HLS'ten gelen AAC, ADTS çerçeveli olur; mp4'e kopyalanırken
     # aac_adtstoasc gerekir.
     hls_aac: bool = False
@@ -171,6 +173,10 @@ class Choice:
     height: int | None = None
     fps: int | None = None
     codec: str | None = None
+    # Unix zamanı. YouTube reklamlı videolarda akışı reklam süresi dolmadan
+    # vermiyor; yt-dlp bu anı format bilgisine yazıyor ve kendi indiricisi
+    # o ana kadar bekliyor (bkz. downloads.prepare).
+    available_at: float = 0.0
 
     def public(self) -> dict:
         data = {
@@ -388,7 +394,22 @@ def _acodec(f: dict) -> str | None:
 
 
 def _usable(f: dict) -> bool:
-    return bool(f.get('url')) and f.get('protocol', 'https') in ('http', 'https', 'm3u8', 'm3u8_native')
+    """yt-dlp kesin DRM'li formatları kendisi eler; "maybe" işaretliler kalır,
+    kopyalanırsa açılmayan şifreli bir dosya çıkar. YouTube'un yapay zekâyla
+    büyüttüğü (-sr, "AI-upscaled") kopyalar da listelenmez: arayüz onları
+    gerçek bir çözünürlük gibi gösterirdi."""
+    return (
+        bool(f.get('url'))
+        and f.get('protocol', 'https') in ('http', 'https', 'm3u8', 'm3u8_native')
+        and not f.get('has_drm')
+        and not str(f.get('format_id') or '').endswith('-sr')
+    )
+
+
+def _intact(f: dict) -> bool:
+    """yt-dlp süresi videonun yarısından kısa olan formatları "possibly
+    damaged" diye preference=-10 ile işaretliyor; başka seçenek varsa seçilmez."""
+    return (f.get('preference') or 0) > -10
 
 
 def _is_direct(f: dict) -> bool:
@@ -416,6 +437,10 @@ def _bucket(width: int | None, height: int | None) -> int | None:
     return min(LADDER, key=lambda step: abs(step - equivalent))
 
 
+def _available_at(*formats: dict) -> float:
+    return max(float(f.get('available_at') or 0) for f in formats)
+
+
 def _is_avc(codec: str | None) -> bool:
     return bool(codec) and (codec.startswith('avc') or codec.startswith('h264'))
 
@@ -426,6 +451,7 @@ def _stream(f: dict) -> Stream:
     return Stream(
         url=f['url'],
         headers=dict(f.get('http_headers') or {}),
+        hls=hls,
         hls_aac=hls and (acodec is None or str(acodec).startswith('mp4a')),
         chunk_size=None if hls else (f.get('downloader_options') or {}).get('http_chunk_size'),
         filesize=f.get('filesize'),
@@ -476,6 +502,7 @@ def _build_media(url: str, platform: str, info: dict, duration: int) -> Media:
     def audio_rank(f: dict) -> tuple:
         codec = f.get('acodec') or ''
         return (
+            _intact(f),
             lang(f),
             codec.startswith('mp4a'),
             _is_direct(f),
@@ -484,7 +511,7 @@ def _build_media(url: str, platform: str, info: dict, duration: int) -> Media:
         )
 
     def best_audio_any(f: dict) -> tuple:
-        return (lang(f), _is_direct(f), 'drc' not in str(f.get('format_id')), f.get('abr') or f.get('tbr') or 0)
+        return (_intact(f), lang(f), _is_direct(f), 'drc' not in str(f.get('format_id')), f.get('abr') or f.get('tbr') or 0)
 
     pairing_audio = max(audio_only, key=audio_rank) if audio_only else None
 
@@ -495,7 +522,7 @@ def _build_media(url: str, platform: str, info: dict, duration: int) -> Media:
     if mp3_source is None:
         combined = [f for f in videos if _acodec(f) is not None]
         if combined:
-            mp3_source = min(combined, key=lambda f: f.get('tbr') or 0)
+            mp3_source = min(combined, key=lambda f: (not _intact(f), f.get('tbr') or 0))
     if mp3_source is not None and duration:
         choices['mp3'] = Choice(
             id='mp3',
@@ -504,6 +531,7 @@ def _build_media(url: str, platform: str, info: dict, duration: int) -> Media:
             # CBR: süre × bit hızı, üstüne yalnızca ID3 etiketi eklenir.
             estimated_bytes=int(config.MP3_BITRATE_KBPS * 1000 / 8 * duration),
             inputs=[_stream(mp3_source)],
+            available_at=_available_at(mp3_source),
         )
 
     # --- Video: her çözünürlük basamağı için en iyi aday.
@@ -516,6 +544,7 @@ def _build_media(url: str, platform: str, info: dict, duration: int) -> Media:
         if not has_audio and pairing_audio is None:
             continue
         rank = (
+            _intact(f),
             _is_avc(_vcodec(f)),               # telefonlar AV1'i her zaman açamıyor
             _is_direct(f),
             f.get('fps') or 0,
@@ -530,10 +559,10 @@ def _build_media(url: str, platform: str, info: dict, duration: int) -> Media:
     for bucket in sorted(best):
         f = best[bucket][1]
         if _acodec(f) is not None:
-            inputs = [_stream(f)]
+            sources = [f]
             size, exact = _size(f, duration)
         else:
-            inputs = [_stream(f), _stream(pairing_audio)]
+            sources = [f, pairing_audio]
             video_size, video_exact = _size(f, duration)
             audio_size, audio_exact = _size(pairing_audio, duration)
             size, exact = video_size + audio_size, video_exact and audio_exact
@@ -546,9 +575,10 @@ def _build_media(url: str, platform: str, info: dict, duration: int) -> Media:
             height=bucket,
             estimated_bytes=size,
             size_exact=exact and size > 0,
-            inputs=inputs,
+            inputs=[_stream(source) for source in sources],
             fps=round(fps) if fps else None,
             codec=_short_codec(_vcodec(f)),
+            available_at=_available_at(*sources),
         )
 
     if not choices:
