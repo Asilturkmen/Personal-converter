@@ -93,7 +93,7 @@ Yaklaşık 5 dakika sürer. Windows, macOS ve Linux'ta çalışır.
 | **Python** | backend | 3.12 veya üstü |
 | **Node.js** | arayüz | 20 veya üstü |
 | **ffmpeg** | video birleştirme ve MP3 | 7.1 veya üstü |
-| **Deno** | yt-dlp'nin YouTube'u çözebilmesi için | herhangi güncel sürüm |
+| **Deno** | yt-dlp'nin YouTube'u çözebilmesi için | 2.3 veya üstü |
 
 <details>
 <summary><b>Windows</b></summary>
@@ -253,7 +253,8 @@ Sonra backend'i yeniden başlat.
 <details>
 <summary><b>Konsolda "JavaScript runtime bulunamadı" uyarısı</b></summary>
 
-Deno kurulu değil ya da terminal onu henüz görmüyor. Deno'yu kur, terminali kapatıp yeniden aç.
+Deno kurulu değil, sürümü 2.3'ten eski ya da terminal onu henüz görmüyor. Deno'yu kur
+(ya da `deno upgrade` ile güncelle), terminali kapatıp yeniden aç.
 Doğru çalıştığını http://localhost:8000/api/health adresinden görebilirsin: `"jsRuntime": "deno"` yazmalı.
 
 </details>

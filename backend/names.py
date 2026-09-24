@@ -4,7 +4,9 @@ import re
 import unicodedata
 from urllib.parse import quote
 
-FORBIDDEN = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
+# Yön denetim karakterleri de atılır: "abc\u202egpj.exe" gibi bir başlık dosya
+# adının uzantısını olduğundan farklı gösterebilirdi.
+FORBIDDEN = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f\u200e\u200f\u202a-\u202e\u2066-\u2069]')
 RESERVED = {'CON', 'PRN', 'AUX', 'NUL', *(f'COM{i}' for i in range(1, 10)), *(f'LPT{i}' for i in range(1, 10))}
 ASCII_MAP = str.maketrans({'ı': 'i', 'İ': 'I', 'ş': 's', 'Ş': 'S', 'ğ': 'g', 'Ğ': 'G'})
 

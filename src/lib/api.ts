@@ -10,6 +10,7 @@ const MB = 1024 * 1024;
 
 const NETWORK_ERROR = 'Sunucuya ulaşılamadı. Bağlantını kontrol edip tekrar dene.';
 const STREAM_BROKEN = 'İndirme yarıda kesildi, dosya eksik kaldı. Tekrar dene.';
+const SAVE_FAILED = 'Dosya kaydedilemedi. Diskte yer olduğundan emin olup tekrar dene.';
 
 async function readError(response: Response): Promise<string> {
   try {
@@ -100,7 +101,8 @@ interface DownloadArgs {
   her hata dosya indirilmeye başlamadan arayüzde gösterilir.
 
   1. showSaveFilePicker varsa: konum sorulur, akış doğrudan diske yazılır.
-     RAM'de birikme yok, ilerleme gösterilir.
+     RAM'de birikme yok, ilerleme gösterilir. Pencere açılamazsa (iframe,
+     kurumsal politika) sonraki katmanlara geçilir.
   2. Yoksa ve dosya blobLimit()'ten küçükse: akış okunur, ilerleme gösterilir,
      parçalar Blob'da toplanıp kaydedilir. Brave bu API'yi varsayılan olarak
      kapatıyor, Firefox ve Safari'de hiç yok — kullanıcıların çoğu buraya düşer.
@@ -114,63 +116,61 @@ export async function startDownload({ info, format, options, signal, onProgress 
   const ext = format.kind === 'audio' ? 'mp3' : 'mp4';
   const filename = safeFilename(info.title, ext);
 
-  // Bilet alındıktan sonra, akış istenmeden iptal edilirse sunucudaki yer bırakılır.
-  let ticket: Ticket | null = null;
-  let consumed = false;
-  const onAbort = () => {
-    if (ticket && !consumed) release(ticket);
-  };
-  signal.addEventListener('abort', onAbort, { once: true });
-
+  // Yer ayırtır ve akışı açar. Sunucu bileti GET geldiği anda tüketir. GET
+  // sunucuya hiç ulaşmadıysa (ağ koptu, iptal) bilet TTL dolana kadar yer
+  // tutar; kullanıcı "Tekrar dene"ye basınca "zaten indirmen var" görürdü.
+  // Bu yüzden bırakılır; ulaştıysa bilet zaten tüketilmiştir, istek bir şey yapmaz.
   const open = async () => {
-    const reserved = await prepare(info, format, options, signal);
-    ticket = reserved;
-    consumed = true; // sunucu bileti GET geldiği anda tüketir
+    const ticket = await prepare(info, format, options, signal);
     try {
-      return await request(ticketHref(reserved), signal);
+      return await request(ticketHref(ticket), signal);
     } catch (error) {
-      // GET sunucuya hiç ulaşmadıysa (ağ koptu) bilet TTL dolana kadar yer
-      // tutar; kullanıcı "Tekrar dene"ye basınca "zaten indirmen var" görürdü.
-      // Ulaştıysa bilet zaten tüketilmiştir ve bu istek hiçbir şey yapmaz.
-      release(reserved);
+      release(ticket);
       throw error;
     }
   };
 
-  try {
-    // --- 1. katman ----------------------------------------------------------
-    if (typeof window.showSaveFilePicker === 'function') {
-      // await'ten önce: user activation henüz geçerli.
-      const picking = window.showSaveFilePicker({
-        suggestedName: filename,
-        startIn: 'downloads',
-        types: [
-          ext === 'mp3'
-            ? { description: 'MP3 ses', accept: { 'audio/mpeg': ['.mp3'] } }
-            : { description: 'MP4 video', accept: { 'video/mp4': ['.mp4'] } },
-        ],
-      });
+  // --- 1. katman ------------------------------------------------------------
+  if (typeof window.showSaveFilePicker === 'function') {
+    // await'ten önce: user activation henüz geçerli.
+    const picking = window.showSaveFilePicker({
+      suggestedName: filename,
+      startIn: 'downloads',
+      types: [
+        ext === 'mp3'
+          ? { description: 'MP3 ses', accept: { 'audio/mpeg': ['.mp3'] } }
+          : { description: 'MP4 video', accept: { 'video/mp4': ['.mp4'] } },
+      ],
+    });
 
-      let handle: FileSystemFileHandle;
-      try {
-        handle = await picking;
-      } catch (error) {
-        // Kullanıcı iptal etti: sessizce çık.
-        if (error instanceof DOMException && error.name === 'AbortError') return 'cancelled';
-        throw error;
-      }
+    let handle: FileSystemFileHandle | null = null;
+    try {
+      handle = await picking;
+    } catch (error) {
+      // Kullanıcı iptal etti: sessizce çık.
+      if (error instanceof DOMException && error.name === 'AbortError') return 'cancelled';
+      // Pencere hiç açılamadı (iframe, kurumsal politika): aşağıdaki katmanlar
+      // kullanıcı etkileşimi gerektirmez, indirme onlarla sürer.
+    }
 
+    if (handle) {
       // Picker yeni bir adı seçildiği anda boş bir dosya olarak oluşturur.
       // Bundan sonraki her hata ya da iptal, geride bu boş dosyayı bırakmamalı.
       // Kullanıcı var olan bir dosyanın üzerine yazmayı seçtiyse ona dokunulmaz:
       // createWritable geçici bir kopyaya yazar, abort() eski içeriği korur.
       const created = await isEmpty(handle);
       try {
-        const response = await open();
-        const writable = await handle.createWritable();
+        // Dosya sunucuda yer ayrılmadan açılır: yazılamıyorsa yer hiç tutulmaz.
+        const writable = await handle.createWritable().catch(() => {
+          throw new Error(SAVE_FAILED);
+        });
         try {
+          const response = await open();
           await pump(response, format, signal, onProgress, (chunk) => writable.write(chunk));
-          await writable.close();
+          // Yazılanlar dosyaya ancak close() ile geçer; disk doluysa burada anlaşılır.
+          await writable.close().catch(() => {
+            throw new Error(SAVE_FAILED);
+          });
         } catch (error) {
           await writable.abort().catch(() => undefined);
           throw error;
@@ -181,34 +181,30 @@ export async function startDownload({ info, format, options, signal, onProgress 
       }
       return 'saved';
     }
-
-    // --- 2. katman ----------------------------------------------------------
-    if (format.estimatedBytes < blobLimit()) {
-      const response = await open();
-      const parts: BlobPart[] = [];
-      await pump(response, format, signal, onProgress, (chunk) => {
-        parts.push(chunk);
-      });
-
-      const blob = new Blob(parts, { type: ext === 'mp3' ? 'audio/mpeg' : 'video/mp4' });
-      const objectUrl = URL.createObjectURL(blob);
-      clickLink(objectUrl, filename);
-      // Tıklamadan hemen sonra iptal edilirse bazı tarayıcılar indirmeyi başlatmıyor.
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000);
-      return 'saved';
-    }
-
-    // --- 3. katman ----------------------------------------------------------
-    // Büyük dosya ve API yok: tarayıcının kendi göstergesi kullanılsın. Yer
-    // önce ayrıldığı için yoğunluk/sınır hataları buraya gelmeden gösterilir.
-    const reserved = await prepare(info, format, options, signal);
-    ticket = reserved;
-    consumed = true;
-    clickLink(ticketHref(reserved), reserved.filename);
-    return 'handed-off';
-  } finally {
-    signal.removeEventListener('abort', onAbort);
   }
+
+  // --- 2. katman ------------------------------------------------------------
+  if (format.estimatedBytes < blobLimit()) {
+    const response = await open();
+    const parts: BlobPart[] = [];
+    await pump(response, format, signal, onProgress, (chunk) => {
+      parts.push(chunk);
+    });
+
+    const blob = new Blob(parts, { type: ext === 'mp3' ? 'audio/mpeg' : 'video/mp4' });
+    const objectUrl = URL.createObjectURL(blob);
+    clickLink(objectUrl, filename);
+    // Tıklamadan hemen sonra iptal edilirse bazı tarayıcılar indirmeyi başlatmıyor.
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000);
+    return 'saved';
+  }
+
+  // --- 3. katman ------------------------------------------------------------
+  // Büyük dosya ve API yok: tarayıcının kendi göstergesi kullanılsın. Yer
+  // önce ayrıldığı için yoğunluk/sınır hataları buraya gelmeden gösterilir.
+  const ticket = await prepare(info, format, options, signal);
+  clickLink(ticketHref(ticket), ticket.filename);
+  return 'handed-off';
 }
 
 /** Boş dosya = picker'ın az önce oluşturduğu. Okunamazsa silinmez (güvenli taraf). */
@@ -239,7 +235,7 @@ async function request(href: string, signal: AbortSignal): Promise<Response> {
   return response;
 }
 
-/** Akışı okur, baytları sayar. Akış yarıda koparsa hata yükseltir. */
+/** Akışı okur, baytları sayar. Akış yarıda koparsa ya da yazılamazsa hata yükseltir. */
 async function pump(
   response: Response,
   format: MediaFormat,
@@ -256,17 +252,29 @@ async function pump(
 
   try {
     for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      await write(value);
-      received += value.byteLength;
+      let chunk: ReadableStreamReadResult<Uint8Array<ArrayBuffer>>;
+      try {
+        chunk = await reader.read();
+      } catch (error) {
+        if (signal.aborted) throw error;
+        // Sunucu 200 döndükten sonra akışı kesti (kaynak koptu, limit aşıldı):
+        // yarım dosya başarılı sayılmaz.
+        throw new Error(STREAM_BROKEN);
+      }
+      if (chunk.done) break;
+      try {
+        await write(chunk.value);
+      } catch {
+        throw new Error(SAVE_FAILED); // disk dolu, izin yok
+      }
+      received += chunk.value.byteLength;
       onProgress(received, estimated, exact);
     }
   } catch (error) {
-    if (signal.aborted) throw error;
-    // Sunucu 200 döndükten sonra akışı kesti (kaynak koptu, limit aşıldı):
-    // yarım dosya başarılı sayılmaz.
-    throw new Error(STREAM_BROKEN);
+    // Okuma bırakılırsa bağlantı açık kalır ve sunucu indirme yerini tutmaya
+    // devam eder; kullanıcı yeniden denediğinde "zaten indirmen var" görürdü.
+    reader.cancel().catch(() => undefined);
+    throw error;
   }
 
   if (received === 0) throw new Error(STREAM_BROKEN);

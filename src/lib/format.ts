@@ -64,10 +64,10 @@ export function qualityNote(height: number | undefined, fps?: number | null, cod
   return [name, fps && fps > 30 ? fps + ' fps' : null, codec].filter(Boolean).join(' · ');
 }
 
-/* Backend'deki names.py ile aynı kurallar: Windows'ta yasak karakterler
-   temizlenir, Türkçe karakterler korunur. */
+/* Backend'deki names.py ile aynı kurallar: Windows'ta yasak karakterler ve
+   yön denetim karakterleri temizlenir, Türkçe karakterler korunur. */
 // eslint-disable-next-line no-control-regex
-const FORBIDDEN = /[<>:"/\\|?*\u0000-\u001f\u007f]/g;
+const FORBIDDEN = /[<>:"/\\|?*\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 
 export function safeFilename(title: string, ext: string): string {
