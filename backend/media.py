@@ -42,11 +42,14 @@ class UserError(Exception):
 
 VIDEO_ID = re.compile(r'[A-Za-z0-9_-]{11}')
 YOUTUBE_PATH_ID = re.compile(r'^/(?:shorts|live|embed|v)/([A-Za-z0-9_-]{11})')
-INSTAGRAM_PATH_ID = re.compile(r'^/(?:[^/]+/)?(?:p|reels?|tv)/([A-Za-z0-9_-]+)')
+# /share/ kısa bağlantılarındaki kod gönderinin kimliği değil (bkz. share_link).
+INSTAGRAM_PATH_ID = re.compile(r'^/(?!share/)(?:[^/]+/)?(?:p|reels?|tv)/([A-Za-z0-9_-]+)')
 INSTAGRAM_STORY = re.compile(r'^/stories/([^/]+)(?:/(\d+))?')
+INSTAGRAM_SHARE = re.compile(r'^/share/(?:p|reels?|tv)/[A-Za-z0-9_-]+/?$')
 
 
-def validate_url(raw: str) -> str:
+def _allowed(raw: str) -> str:
+    """Boş değil, şeması http(s) ve alan adı izin listesinde; şemasızsa https eklenir."""
     url = (raw or '').strip()
     if not url:
         raise UserError('Bir bağlantı yapıştır.')
@@ -57,6 +60,24 @@ def validate_url(raw: str) -> str:
     host = (parts.hostname or '').lower()
     if parts.scheme not in ('http', 'https') or host not in config.ALLOWED_HOSTS:
         raise UserError('Yalnızca YouTube ve Instagram bağlantıları destekleniyor.')
+    return url
+
+
+def share_link(raw: str) -> str | None:
+    """Instagram uygulamasının "Paylaş" menüsünün verdiği kısa bağlantı
+    (instagram.com/share/reel/KOD) ise sorgusuz hâli, değilse None.
+
+    Buradaki KOD gönderinin kimliği değil; gönderinin asıl adresini Instagram
+    yönlendirmeyle söylüyor (bkz. app.py). yt-dlp de bu bağlantıları kendi
+    Instagram çözümleyicisine bilerek almıyor."""
+    parts = urlsplit(_allowed(raw))
+    if platform_of(parts.geturl()) == 'instagram' and INSTAGRAM_SHARE.match(parts.path):
+        return 'https://www.instagram.com' + parts.path
+    return None
+
+
+def validate_url(raw: str) -> str:
+    url = _allowed(raw)
 
     # Tek bir içeriğe işaret etmeyen bağlantılar (oynatma listesi, kanal,
     # profil) yt-dlp'ye hiç verilmez: yt-dlp listedeki her videoyu tek tek
@@ -316,7 +337,14 @@ def _friendly_error(text: str, platform: str) -> str:
         needle in lowered
         for needle in ('login', 'log in', 'cookie', 'rate-limit', 'rate limit', 'not available', 'authentication')
     ):
-        return 'Instagram oturumu gerekli veya süresi dolmuş — cookies.txt yenilenmeli.'
+        # Instagram gizli, kaldırılmış ve "oturum aç" isteyen içeriği aynı
+        # hatayla veriyor. Çerez bilgisi ziyaretçiye değil sunucuyu yönetene.
+        if config.INSTAGRAM_COOKIES.is_file():
+            log.warning('Instagram oturum istedi; %s süresi dolmuş olabilir, yenilenmeli.', config.INSTAGRAM_COOKIES)
+        else:
+            log.warning('Instagram oturum istedi; çerez dosyası yok (%s). Hikâyeler ve bazı gönderiler çerez gerektirir.',
+                        config.INSTAGRAM_COOKIES)
+        return 'Instagram bu içeriği vermedi. Gönderi kaldırılmış ya da gizli bir hesaba ait olabilir; değilse biraz sonra tekrar dene.'
     if 'live event will begin' in lowered or 'premieres in' in lowered:
         return 'Canlı yayınlar desteklenmiyor.'
     if 'live stream recording is not available' in lowered:
@@ -538,7 +566,7 @@ def _build_media(url: str, platform: str, info: dict, duration: int) -> Media:
         title=_title(info, platform),
         uploader=(info.get('uploader') or info.get('channel') or info.get('uploader_id') or '').strip(),
         duration=duration,
-        thumbnails=_thumbnail_candidates(info),
+        thumbnails=_thumbnail_candidates(info, platform),
         width=width,
         height=height,
         choices=choices,
@@ -571,23 +599,36 @@ def _probe_duration(f: dict) -> int:
 
 
 THUMBNAIL_CANDIDATES = 6
+# YouTube bu boyutu (480x360) her video için üretiyor. Büyükleri (maxresdefault,
+# hq720, sddefault) yalnızca yeterince yüksek çözünürlükte yüklenmiş videolarda
+# var; eski ve düşük çözünürlüklü videolarda ilk adayların hepsi 404 dönüyor
+# (ölçüldü: jNQXAC9IVRw, 6/6).
+YOUTUBE_FALLBACK_THUMBNAIL = 'https://i.ytimg.com/vi/{}/hqdefault.jpg'
 
 
-def _thumbnail_candidates(info: dict) -> list[tuple[str, dict[str, str]]]:
+def _thumbnail_candidates(info: dict, platform: str) -> list[tuple[str, dict[str, str]]]:
     """En iyiden kötüye kapak adayları. Eşit öncelikte JPEG önde: MP3
     kapağına gömülürken dönüştürme gerekmez."""
     thumbs = [t for t in info.get('thumbnails') or [] if t.get('url')]
-    if not thumbs:
+    if thumbs:
+        def rank(t: dict) -> tuple:
+            is_jpeg = '.jpg' in t['url'] or '.jpeg' in t['url']
+            area = (t.get('width') or 0) * (t.get('height') or 0)
+            return (t.get('preference') or 0, is_jpeg, area)
+
+        ordered = sorted(thumbs, key=rank, reverse=True)[:THUMBNAIL_CANDIDATES]
+        candidates = [(t['url'], dict(t.get('http_headers') or {})) for t in ordered]
+    else:
         url = info.get('thumbnail')
-        return [(url, {})] if url else []
+        candidates = [(url, {})] if url else []
 
-    def rank(t: dict) -> tuple:
-        is_jpeg = '.jpg' in t['url'] or '.jpeg' in t['url']
-        area = (t.get('width') or 0) * (t.get('height') or 0)
-        return (t.get('preference') or 0, is_jpeg, area)
-
-    ordered = sorted(thumbs, key=rank, reverse=True)[:THUMBNAIL_CANDIDATES]
-    return [(t['url'], dict(t.get('http_headers') or {})) for t in ordered]
+    # Büyük kapaklar yoksa denenecek, her videoda bulunan son yedek.
+    video_id = str(info.get('id') or '')
+    if platform == 'youtube' and VIDEO_ID.fullmatch(video_id):
+        fallback = YOUTUBE_FALLBACK_THUMBNAIL.format(video_id)
+        if all(url != fallback for url, _ in candidates):
+            candidates.append((fallback, {}))
+    return candidates
 
 
 def resolve(url: str) -> Media:

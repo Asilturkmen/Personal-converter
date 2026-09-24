@@ -37,7 +37,7 @@ from limits import PerKeySlots, Slots
 from media import Choice, Media, UserError
 from names import content_disposition, safe_filename
 from relay import RelayServer, RelayTicket
-from stream import FFmpegStream, StreamFailed, build_command, time_limit
+from stream import MISSING_STREAM_MARKER, FFmpegStream, StreamFailed, build_command, time_limit
 from tags import id3_tag
 
 log = logging.getLogger('converter.downloads')
@@ -163,7 +163,9 @@ async def _start(
     tags: bool,
     load_cover: Callable[[Media], Awaitable[bytes | None]],
 ) -> bool:
-    """ffmpeg'i başlatır ve ilk baytı bekler. İlk bayt geldiyse True."""
+    """ffmpeg'i başlatır ve ilk baytı bekler. İlk bayt geldiyse True; kaynak
+    açılamadıysa False (yeniden denenebilir). İstenen akış kaynakta hiç yoksa
+    UserError: yeniden denemek bir şey değiştirmez."""
     item, choice, relay = reservation.item, reservation.choice, reservation.relay
 
     # Parçalı okunması gereken girdiler loopback relay'den beslenir.
@@ -196,7 +198,13 @@ async def _start(
     with anyio.move_on_after(FIRST_BYTE_TIMEOUT):
         reservation.first = await anyio.to_thread.run_sync(reservation.proc.read, abandon_on_cancel=True)
     if not reservation.first:
-        log.warning('ffmpeg başlamadı: %s', reservation.proc.error_text())
+        error = await anyio.to_thread.run_sync(reservation.proc.startup_error)
+        log.warning('ffmpeg başlamadı: %s', error)
+        if MISSING_STREAM_MARKER in error.lower():
+            # Kaynakta istenen akış yok; taze çözümleme de aynı sonucu verir.
+            if choice.kind == 'audio':
+                raise UserError('Bu videoda ses yok, MP3\'e çevrilemez.', 422)
+            raise UserError('Bu videonun görüntü ya da ses akışı eksik, bu formatta indirilemiyor.', 422)
         return False
     return True
 

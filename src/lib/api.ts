@@ -123,9 +123,18 @@ export async function startDownload({ info, format, options, signal, onProgress 
   signal.addEventListener('abort', onAbort, { once: true });
 
   const open = async () => {
-    ticket = await prepare(info, format, options, signal);
+    const reserved = await prepare(info, format, options, signal);
+    ticket = reserved;
     consumed = true; // sunucu bileti GET geldiği anda tüketir
-    return request(ticketHref(ticket), signal);
+    try {
+      return await request(ticketHref(reserved), signal);
+    } catch (error) {
+      // GET sunucuya hiç ulaşmadıysa (ağ koptu) bilet TTL dolana kadar yer
+      // tutar; kullanıcı "Tekrar dene"ye basınca "zaten indirmen var" görürdü.
+      // Ulaştıysa bilet zaten tüketilmiştir ve bu istek hiçbir şey yapmaz.
+      release(reserved);
+      throw error;
+    }
   };
 
   try {
