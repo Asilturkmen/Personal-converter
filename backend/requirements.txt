@@ -1,9 +1,17 @@
-fastapi>=0.141
-uvicorn[standard]>=0.53
-python-dotenv>=1.2
-httpx>=0.28
-# [default] şart: YouTube imza çözümü için yt-dlp-ejs'i ve mutagen'i getirir.
-# YouTube ayda birkaç kez bir şeyi kırıyor; indirme bozulursa ilk iş:
+# Sürümler sabit: yarın çıkacak bir FastAPI/Starlette sürümü sunucudaki
+# kurulumu habersizce bozmasın. Yükseltme bilinçli yapılır: sürümü değiştir,
+# testleri çalıştır, sonra sunucuya al.
+fastapi==0.141.1
+starlette==1.7.0
+pydantic==2.13.5
+anyio==4.15.1
+uvicorn[standard]==0.53.0
+python-dotenv==1.2.3
+httpx==0.28.1
+mutagen==1.48.1
+
+# yt-dlp tek istisna: sabitlenmez, çünkü YouTube ayda birkaç kez bir şeyi
+# kırıyor ve çözüm her zaman yeni sürüm. [default] şart: YouTube imza çözümü
+# için yt-dlp-ejs'i getirir. İndirme bozulursa ilk iş:
 #   pip install -U "yt-dlp[default]"
 yt-dlp[default]>=2026.8.19
-mutagen>=1.47

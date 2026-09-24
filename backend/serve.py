@@ -10,6 +10,10 @@
     Daha fazla kapasite için birden çok örnek + nginx `ip_hash` (her
     istemci hep aynı örneğe gider).
   - X-Forwarded-For yalnızca FORWARDED_ALLOW_IPS'teki proxy'lerden kabul edilir.
+  - Kapanış süresi sınırlı. uvicorn varsayılan olarak açık bağlantıların
+    bitmesini sonsuza kadar bekler; süren bir indirme `systemctl restart`'ı
+    dakikalarca tutardı. Süre dolunca kalan indirmeler kesilir (istemci yarım
+    dosyayı hata olarak görür) ve ffmpeg süreçleri kapatılır.
 """
 
 import uvicorn
@@ -24,4 +28,5 @@ if __name__ == '__main__':
         workers=1,
         proxy_headers=True,
         forwarded_allow_ips=config.FORWARDED_ALLOW_IPS,
+        timeout_graceful_shutdown=config.SHUTDOWN_TIMEOUT_SECONDS,
     )

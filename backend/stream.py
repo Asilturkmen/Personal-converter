@@ -24,7 +24,7 @@ log = logging.getLogger('converter.stream')
 CHUNK_SIZE = 64 * 1024
 
 # Kaynak koparsa yeniden bağlan, ama sonsuza kadar değil: aksi hâlde ölü bir
-# kaynak indirmeyi 15 dakikalık zaman aşımına kadar asılı tutar.
+# kaynak indirmeyi zaman aşımına kadar asılı tutar.
 # rw_timeout: 30 sn hiç veri gelmezse G/Ç hatası (mikrosaniye).
 IO_TIMEOUT = ['-rw_timeout', '30000000']
 RECONNECT = ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5',
@@ -97,15 +97,28 @@ class _Tail:
         return ' | '.join(self.lines)
 
 
+WATCH_INTERVAL = 5
+
+
+def time_limit(estimated_bytes: int) -> float:
+    """Üst süre: en az DOWNLOAD_TIMEOUT, büyük dosyada en düşük kabul edilen
+    hızla inmesine yetecek kadar. Sabit bir süre yavaş bağlantıda büyük
+    dosyayı yarıda keserdi (1 GB, 15 dk → 1,1 MB/sn altı hep başarısız)."""
+    return max(config.DOWNLOAD_TIMEOUT_SECONDS, estimated_bytes / config.MIN_DOWNLOAD_BYTES_PER_SECOND)
+
+
 class FFmpegStream:
-    def __init__(self, cmd: list[str]):
+    def __init__(self, cmd: list[str], *, max_seconds: float | None = None):
         self.cmd = cmd
+        self.max_seconds = max_seconds or config.DOWNLOAD_TIMEOUT_SECONDS
         self.proc: subprocess.Popen | None = None
         self.bytes_sent = 0
         self.started_at = time.monotonic()
+        self._last_data = self.started_at
         self._stderr = _Tail(collections.deque(maxlen=20))
         self._killed_reason: str | None = None
-        self._watchdog: threading.Timer | None = None
+        self._closed = threading.Event()
+        self._watchdog: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
 
     def start(self) -> None:
@@ -119,11 +132,21 @@ class FFmpegStream:
         self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
         self._stderr_thread.start()
 
-        # Zaman aşımı: akış bitmemişse süreç öldürülür, okuma döngüsü de
-        # EOF alıp çıkar.
-        self._watchdog = threading.Timer(config.DOWNLOAD_TIMEOUT_SECONDS, self.kill, args=('zaman aşımı',))
-        self._watchdog.daemon = True
+        self.started_at = self._last_data = time.monotonic()
+        self._watchdog = threading.Thread(target=self._watch, daemon=True)
         self._watchdog.start()
+
+    def _watch(self) -> None:
+        """Süre aşılırsa ya da akış durursa süreç öldürülür; okuma döngüsü de
+        EOF alıp çıkar. İlerleyen bir indirme yalnızca üst süreye takılır."""
+        while not self._closed.wait(WATCH_INTERVAL):
+            now = time.monotonic()
+            if now - self.started_at > self.max_seconds:
+                self.kill('zaman aşımı')
+                return
+            if now - self._last_data > config.DOWNLOAD_STALL_SECONDS:
+                self.kill(f'akış {config.DOWNLOAD_STALL_SECONDS} sn durdu')
+                return
 
     def _drain_stderr(self) -> None:
         assert self.proc and self.proc.stderr
@@ -140,6 +163,9 @@ class FFmpegStream:
         except (OSError, ValueError):
             return b''
         if chunk:
+            # İstemci okumayı bırakırsa ffmpeg pipe'ta bekler, buraya da veri
+            # gelmez: yavaş kaynak da, okumayan istemci de "durma" sayılır.
+            self._last_data = time.monotonic()
             self.bytes_sent += len(chunk)
             if self.bytes_sent > config.MAX_BYTES:
                 self.kill('boyut sınırı aşıldı')
@@ -175,8 +201,7 @@ class FFmpegStream:
 
     def close(self) -> None:
         """Her durumda (istemci koptu, hata, başarı) çağrılır."""
-        if self._watchdog:
-            self._watchdog.cancel()
+        self._closed.set()
         self.kill('istemci bağlantıyı kapattı')
         if self.proc:
             try:

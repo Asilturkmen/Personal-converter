@@ -36,7 +36,14 @@ MAX_HEIGHT = _int('MAX_HEIGHT', 1080)
 MIN_HEIGHT = _int('MIN_HEIGHT', 360)
 MAX_DURATION_SECONDS = _int('MAX_DURATION_MINUTES', 90) * 60
 MAX_BYTES = _int('MAX_MEGABYTES', 2048) * 1024 * 1024
+# İndirme süresi iki kuralla sınırlı (bkz. stream.py):
+#  - üst süre: en az DOWNLOAD_TIMEOUT_MINUTES, büyük dosyada MIN_DOWNLOAD_KBPS
+#    hızla inmesine yetecek kadar uzar; yavaş bağlantıda dosya yarıda kesilmez.
+#  - durma: DOWNLOAD_STALL_SECONDS boyunca tek bayt akmazsa kesilir; takılan
+#    ya da okunmayan bir indirme yer tutmaz.
 DOWNLOAD_TIMEOUT_SECONDS = _int('DOWNLOAD_TIMEOUT_MINUTES', 15) * 60
+MIN_DOWNLOAD_BYTES_PER_SECOND = _int('MIN_DOWNLOAD_KBPS', 256) * 1024
+DOWNLOAD_STALL_SECONDS = _int('DOWNLOAD_STALL_SECONDS', 120)
 
 MAX_CONCURRENT_DOWNLOADS = _int('MAX_CONCURRENT_DOWNLOADS', 3)
 MAX_CONCURRENT_INFO = _int('MAX_CONCURRENT_INFO', 2)
@@ -69,6 +76,9 @@ PORT = _int('PORT', 8000)
 # sola yürür, CIDR destekler). Varsayılan uvicorn'unkiyle aynı: yalnızca
 # localhost. nginx başka bir makinedeyse onun adresi yazılmalı.
 FORWARDED_ALLOW_IPS = os.getenv('FORWARDED_ALLOW_IPS', '127.0.0.1,::1')
+# Kapanırken süren indirmelerin bitmesi en fazla bu kadar beklenir. systemd'nin
+# TimeoutStopSec'inden (varsayılan 90 sn) kısa olmalı.
+SHUTDOWN_TIMEOUT_SECONDS = _int('SHUTDOWN_TIMEOUT_SECONDS', 20)
 
 # Göreli yol backend/ klasörüne göre çözülür; uvicorn nereden başlatılırsa
 # başlatılsın aynı dosyayı bulur.

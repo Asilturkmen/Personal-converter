@@ -24,10 +24,12 @@ kopyalayıp değiştirmek istediğin satırları aç.
 | `MAX_HEIGHT` / `MIN_HEIGHT` | 1080 / 360 | kısa kenara göre |
 | `MAX_DURATION_MINUTES` | 90 | |
 | `MAX_MEGABYTES` | 2048 | ön kontrol + akış sırasında bayt sayacı |
-| `DOWNLOAD_TIMEOUT_MINUTES` | 15 | aşılırsa ffmpeg öldürülür |
+| `DOWNLOAD_TIMEOUT_MINUTES` | 15 | indirme için en kısa üst süre; büyük dosyada uzar |
+| `MIN_DOWNLOAD_KBPS` | 256 | üst süre = boyut ÷ bu hız (en az `DOWNLOAD_TIMEOUT_MINUTES`) |
+| `DOWNLOAD_STALL_SECONDS` | 120 | bu süre tek bayt akmazsa indirme kesilir |
 | `MAX_CONCURRENT_DOWNLOADS` | 3 | dolu → 503, kuyruk yok |
 | `MAX_CONCURRENT_INFO` | 2 | link çözümleme CPU yiyor, ayrı sınır |
-| `MAX_DOWNLOADS_PER_IP` | 1 | 0 = sınırsız (test için) |
+| `MAX_DOWNLOADS_PER_IP` | 1 | 0 = sınırsız (test için); IPv6'da /64 bloğu başına |
 | `MAX_INFO_PER_IP` / `INFO_PER_MINUTE_PER_IP` | 1 / 20 | yeni link çözümleme (önbellek ıskası) için IP başına |
 | `RESERVATION_TTL_SECONDS` | 30 | ayrılıp indirilmeyen yer bu sürede boşalır |
 | `CACHE_TTL_MINUTES` / `CACHE_MAX_ENTRIES` | 25 / 200 | video kimliği bazında |
@@ -38,6 +40,7 @@ kopyalayıp değiştirmek istediğin satırları aç.
 | `FFMPEG_PATH` / `FFPROBE_PATH` | ffmpeg / ffprobe | PATH'te değilse tam yol |
 | `HOST` / `PORT` | 127.0.0.1 / 8000 | `serve.py` için |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1,::1` | `X-Forwarded-For`'una güvenilen proxy'ler (`serve.py`) |
+| `SHUTDOWN_TIMEOUT_SECONDS` | 20 | kapanırken süren indirmeler en fazla bu kadar beklenir (`serve.py`) |
 
 
 ## API
@@ -47,7 +50,6 @@ kopyalayıp değiştirmek istediğin satırları aç.
 | `GET /api/info?url=` | başlık, kanal, süre, kapak ve hazır format listesi (`mp3`, `v360` … `v1080`) |
 | `POST /api/download/prepare` | gövde `{url, format, cover?, tags?}` → yer ayırır, ffmpeg'i başlatır; `{ticket, filename, estimatedBytes, expiresIn}` |
 | `GET /api/download?ticket=` | bileti tüketir, dosyayı akıtır |
-| `GET /api/download?url=&format=[&cover=1&tags=1]` | tek adımda: prepare + akış (bilet gerektirmeyen istemciler için) |
 | `DELETE /api/download/{ticket}` | kullanılmayacak bileti hemen bırakır |
 | `GET /api/thumbnail?url=[&download=1]` | kapak görseli (Instagram CDN'i başka origin'e görsel vermediği için backend üzerinden) |
 | `GET /api/health` | `{"ok": true, "ytDlp": "...", "jsRuntime": "deno"}` |
@@ -61,6 +63,15 @@ bildirdiği dosya boyutundan mı (yüzde güvenilir) yoksa bit hızı × sürede
 hata dönerse (yoğunluk, IP sınırı) kullanıcı bunu göremez; tarayıcı hata metnini
 `.mp4` adıyla kaydedebilir. `prepare` her hatayı dosya indirmesi başlamadan JSON
 olarak döndürür. Bilet 30 sn geçerli, onu alan IP'ye bağlı ve tek kullanımlık.
+
+Biletsiz, tek adımlı bir indirme adresi bilerek yok: öyle bir adres başka sitelerden
+düz bir bağlantıyla kullanılabilir ve sunucunun bant genişliği onların indirme
+butonuna dönüşür. Bilet almak JSON gövdeli bir POST gerektirir; tarayıcı bunu
+başka bir origin'den CORS izni olmadan göndermez (bu backend CORS açmaz).
+
+Bağlantı doğrulanınca parametresiz hâline çevrilir (`watch?v=ID`, `instagram.com/p/KOD/`).
+`?si=` ve `?igsh=` paylaşan kişiyi tanımlayan izlerdir; önbellekteki kayıt aynı videoyu
+açan herkese döndüğü için kullanıcının yapıştırdığı adres hiçbir yere taşınmaz.
 
 Yalnızca tek bir içeriğe işaret eden bağlantılar kabul edilir. Oynatma listesi,
 kanal ve Instagram profili bağlantıları yt-dlp'ye verilmeden reddedilir: yt-dlp
@@ -122,7 +133,13 @@ relay her girdinin son baytına kadar teslim edildiğini kaydeder; ffmpeg'in
 stderr'indeki kesinti uyarıları da hata sayılır. İkisinden biri tutarsa akış
 temiz kapatılmaz, tarayıcı dosyayı eksik görür ve arayüz "İndirme yarıda kesildi"
 der. CDN'den doğrudan okunan girdilerde ffmpeg en fazla 5 kez yeniden bağlanır ve
-30 sn veri gelmezse vazgeçer; ölü bir kaynak indirmeyi 15 dakika asılı tutmaz.
+30 sn veri gelmezse vazgeçer; ölü bir kaynak indirmeyi asılı tutmaz.
+
+**Süre sınırları.** Sabit bir süre yavaş bağlantıda büyük dosyayı yarıda keserdi
+(1 GB'lık dosya 15 dakikada ancak 1,1 MB/sn ile iner). Bu yüzden iki kural var: üst
+süre dosya boyutuyla uzar (boyut ÷ 256 KB/sn, en az 15 dk; 1 GB ≈ 68 dk) ve
+120 sn boyunca tek bayt akmazsa indirme kesilir. İlerleyen bir indirme yalnızca üst
+süreye takılır; takılan ya da okunmayan bir indirme yer tutmaz.
 
 **MP3 etiketleri.** ffmpeg pipe'a yazarken ID3 etiketinin boyut alanını dolduramıyor
 (sona gelip geri dönmesi gerekir), boyut 0 kalınca oynatıcılar kapağı ve başlığı
