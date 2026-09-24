@@ -10,7 +10,7 @@ interface Props {
 }
 
 function subLabel(format: MediaFormat): string {
-  if (format.kind === 'audio') return (format.bitrate ?? 192) + ' kbps · en iyi ses kaynağından';
+  if (format.kind === 'audio') return 'En iyi ses kaynağından';
   return qualityNote(format.height, format.fps, format.codec) || 'MP4';
 }
 
