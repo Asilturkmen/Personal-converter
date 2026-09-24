@@ -91,8 +91,8 @@ Yaklaşık 5 dakika sürer. Windows, macOS ve Linux'ta çalışır.
 | | Neden | Sürüm |
 |---|---|---|
 | **Python** | backend | 3.12 veya üstü |
-| **Node.js** | arayüz | 18 veya üstü |
-| **ffmpeg** | video birleştirme ve MP3 | herhangi güncel sürüm |
+| **Node.js** | arayüz | 20 veya üstü |
+| **ffmpeg** | video birleştirme ve MP3 | 7.1 veya üstü |
 | **Deno** | yt-dlp'nin YouTube'u çözebilmesi için | herhangi güncel sürüm |
 
 <details>
@@ -130,7 +130,9 @@ sudo apt install python3 python3-venv ffmpeg nodejs npm
 curl -fsSL https://deno.land/install.sh | sh
 ```
 
-Dağıtımının Node.js paketi 18'den eskiyse [nodejs.org](https://nodejs.org)'dan güncel sürümü kur.
+Dağıtımının paketleri eskiyse (örneğin Ubuntu 24.04'te Node.js 18 ve ffmpeg 6.1 geliyor)
+Node.js'i [nodejs.org](https://nodejs.org)'dan, ffmpeg'i [ffmpeg.org](https://ffmpeg.org/download.html#build-linux)'daki
+Linux derlemelerinden kur.
 
 </details>
 
@@ -214,7 +216,8 @@ Reels ve gönderi videoları giriş yapmadan çalışır; **hikâyeler için Ins
 2. Instagram'a **ikincil bir hesapla** giriş yap (ana hesabını kullanma).
 3. instagram.com açıkken eklentiyle `cookies.txt` dosyasını indir ve `backend/` klasörüne koy.
 
-Oturum zamanla düşer; "cookies.txt yenilenmeli" uyarısını görürsen dosyayı yeniden indir.
+Oturum zamanla düşer; backend konsolunda "Instagram oturum istedi" uyarısını görürsen dosyayı
+yeniden indir.
 
 ## Ayarlar
 

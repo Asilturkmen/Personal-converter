@@ -34,6 +34,9 @@ RECONNECT = ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_ma
 # çıkabiliyor (ölçüldü: %40'ı verilmiş girdi → "partial file", çıkış kodu 0).
 # -loglevel error altında görünen bu satırlar kesinti sayılır.
 TRUNCATION_MARKERS = ('partial file', 'prematurely', 'i/o error', 'connection reset', 'error during demuxing')
+# -map ile istenen akış girdide yok (ör. sessiz video → MP3). Yeniden denemek
+# sonucu değiştirmez.
+MISSING_STREAM_MARKER = 'matches no streams'
 FRAGMENTED_MP4 = ['-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4']
 
 
@@ -214,5 +217,16 @@ class FFmpegStream:
                 except OSError:
                     pass
 
-    def error_text(self) -> str:
+    def startup_error(self) -> str:
+        """İlk bayt gelmediyse çağrılır (bloklar, thread havuzunda): süreci
+        durdurur ve stderr'in sonuna kadar okunmasını bekler. Aksi hâlde
+        ffmpeg'in son satırı henüz okunmamış olabilir."""
+        self.kill('başlamadı')
+        if self.proc:
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+        if self._stderr_thread:
+            self._stderr_thread.join(timeout=2)
         return self._stderr.text()

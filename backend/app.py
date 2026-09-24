@@ -15,6 +15,7 @@ import logging
 import shutil
 import sys
 from contextlib import asynccontextmanager
+from urllib.parse import urljoin
 
 import httpx
 import yt_dlp
@@ -22,6 +23,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 import config
 import downloads
@@ -47,6 +49,8 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 info_slots = Slots(config.MAX_CONCURRENT_INFO)
 info_ip_slots = PerKeySlots(config.MAX_INFO_PER_IP)
 info_rate = RateLimiter(config.INFO_PER_MINUTE_PER_IP)
+
+RATE_LIMITED = 'Kısa sürede çok fazla bağlantı getirdin. Bir dakika bekleyip tekrar dene.'
 
 
 # --------------------------------------------------------------------------
@@ -100,7 +104,45 @@ async def lifespan(app: FastAPI):
         await app.state.http.aclose()
 
 
+# --------------------------------------------------------------------------
+# Yalnızca kendi arayüzünden
+# --------------------------------------------------------------------------
+
+class SameOriginOnly:
+    """Başka bir sitenin sayfasından gelen tarayıcı isteklerini reddeder.
+
+    CORS başka sitelerin yanıtı okumasını engeller, isteğin gönderilmesini
+    engellemez: başka bir sayfaya konan <img src=".../api/info?url=..."> o
+    sayfanın her ziyaretçisinde burada bir yt-dlp çözümlemesi başlatır,
+    çözümleme slotlarını doldurur ve sunucunun IP'sini YouTube'un gözünde
+    yıpratır. Kapaklar da aynı yolla başka sitelere gömülebilirdi.
+
+    Sec-Fetch-Site'ı tarayıcı koyar, sayfanın JavaScript'i değiştiremez:
+    `same-origin` kendi arayüzümüz, `none` adres çubuğuna yazılan adres.
+    Başlık yoksa (curl, eski tarayıcı) istek geçer; tarayıcı dışı bir istemci
+    başlığı zaten istediği gibi yazar, ona karşı koruma IP sınırlarıdır.
+
+    Origin ile Host karşılaştırılmıyor: reverse proxy Host'u değiştirebilir
+    (nginx'in varsayılanı $proxy_host) ve bu, kendi arayüzümüzü engellerdi.
+    Saf ASGI: BaseHTTPMiddleware akış yanıtlarını araya alıp yeniden akıtır."""
+
+    ALLOWED = frozenset({b'same-origin', b'none'})
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope['type'] == 'http':
+            site = dict(scope['headers']).get(b'sec-fetch-site')
+            if site is not None and site not in self.ALLOWED:
+                response = JSONResponse({'detail': 'Bu servis yalnızca kendi sayfasından kullanılabilir.'}, status_code=403)
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 app = FastAPI(title='Asil Personal Converter', lifespan=lifespan, docs_url=None, redoc_url=None)
+app.add_middleware(SameOriginOnly)
 
 
 @app.exception_handler(UserError)
@@ -161,7 +203,7 @@ async def get_media(url: str, ip: str, fresh: bool = False) -> Media:
 
     # Sınırlar yalnızca gerçek çözümlemeye (önbellek ıskası) uygulanır.
     if not info_rate.allow(ip):
-        raise UserError('Kısa sürede çok fazla bağlantı getirdin. Bir dakika bekleyip tekrar dene.', 429)
+        raise UserError(RATE_LIMITED, 429)
     if not info_ip_slots.try_acquire(ip):
         raise UserError('Önceki bağlantın hâlâ çözümleniyor. Birkaç saniye bekleyip tekrar dene.', 429)
     if not info_slots.try_acquire():
@@ -186,6 +228,28 @@ async def get_media(url: str, ip: str, fresh: bool = False) -> Media:
         info_ip_slots.release(ip)
 
 
+async def open_share_link(http: httpx.AsyncClient, share: str, ip: str) -> str:
+    """Instagram'ın /share/ kısa bağlantısını gönderinin asıl adresine çevirir.
+
+    Instagram asıl adresi tarayıcı olmayan istemcilere 302 ile söylüyor
+    (tarayıcıya JavaScript'li bir sayfa dönüyor). Tek istek atılır, yönlendirme
+    izlenmez; yalnızca Location okunur ve o adres de olağan doğrulamadan geçer."""
+    if not info_rate.allow(ip):
+        raise UserError(RATE_LIMITED, 429)
+    try:
+        response = await http.head(share, follow_redirects=False)
+    except httpx.HTTPError as error:
+        log.info('paylaşım bağlantısı açılamadı (%s): %s', share, error)
+        raise UserError('Instagram şu an yanıt vermiyor. Biraz sonra tekrar dene.', 502) from None
+
+    location = response.headers.get('location', '') if response.is_redirect else ''
+    target = urljoin(share, location) if location else ''
+    if not target or not media.cache_key(target).startswith('ig:'):
+        log.info('paylaşım bağlantısı gönderiye yönlenmedi (%s): %d %s', share, response.status_code, location)
+        raise UserError('Bu paylaşım bağlantısı açılamadı. Gönderiyi Instagram\'da açıp bağlantısını oradan kopyala.', 422)
+    return target
+
+
 # --------------------------------------------------------------------------
 # API
 # --------------------------------------------------------------------------
@@ -197,7 +261,12 @@ async def health(request: Request):
 
 @app.get('/api/info')
 async def info(request: Request, url: str = ''):
-    item = await get_media(media.validate_url(url), client_ip(request))
+    """Yanıttaki `url` bağlantının temizlenmiş hâlidir; arayüz kapak ve indirme
+    için bunu kullanır. /share/ kısa bağlantıları bu yüzden yalnızca burada açılır."""
+    ip = client_ip(request)
+    if share := media.share_link(url):
+        url = await open_share_link(request.app.state.http, share, ip)
+    item = await get_media(media.validate_url(url), ip)
     return item.public()
 
 

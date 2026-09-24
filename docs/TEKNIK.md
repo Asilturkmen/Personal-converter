@@ -69,9 +69,22 @@ düz bir bağlantıyla kullanılabilir ve sunucunun bant genişliği onların in
 butonuna dönüşür. Bilet almak JSON gövdeli bir POST gerektirir; tarayıcı bunu
 başka bir origin'den CORS izni olmadan göndermez (bu backend CORS açmaz).
 
+**Yalnızca kendi arayüzünden.** CORS başka sitelerin yanıtı *okumasını* engeller,
+isteğin *gönderilmesini* engellemez: başka bir sayfaya konan
+`<img src=".../api/info?url=...">` o sayfanın her ziyaretçisinde bir yt-dlp çözümlemesi
+başlatırdı. Bu yüzden tarayıcının koyduğu `Sec-Fetch-Site` başlığı `same-origin`
+(kendi arayüzü) ya da `none` (adres çubuğu) değilse her `/api` isteği 403 ile reddedilir
+(`SameOriginOnly`, `app.py`). Başlığı sayfanın JavaScript'i değiştiremez. Başlık yoksa
+(curl, eski tarayıcı) istek geçer; tarayıcı dışı istemcilere karşı koruma IP sınırlarıdır.
+Sitenin başka bir sayfaya iframe ile gömülmesi ise sayfayı sunan tarafın işidir
+(bkz. [Sunucuya taşırken](#sunucuya-taşırken)).
+
 Bağlantı doğrulanınca parametresiz hâline çevrilir (`watch?v=ID`, `instagram.com/p/KOD/`).
 `?si=` ve `?igsh=` paylaşan kişiyi tanımlayan izlerdir; önbellekteki kayıt aynı videoyu
 açan herkese döndüğü için kullanıcının yapıştırdığı adres hiçbir yere taşınmaz.
+Instagram'ın `instagram.com/share/reel/KOD` kısa bağlantılarındaki kod gönderinin kimliği
+değildir; `/api/info` asıl adresi Instagram'ın yönlendirmesinden (tek bir `HEAD`, 302)
+öğrenir ve onunla devam eder.
 
 Yalnızca tek bir içeriğe işaret eden bağlantılar kabul edilir. Oynatma listesi,
 kanal ve Instagram profili bağlantıları yt-dlp'ye verilmeden reddedilir: yt-dlp
@@ -149,11 +162,17 @@ bellekte oluşturulup akışın başına ekleniyor. WebP kapaklar bellekte JPEG'
 **Bayat CDN adresleri.** Video bilgisi 25 dakika önbellekte tutulur, ama YouTube
 adresleri bazen süresi dolmadan 403 dönmeye başlıyor (gözlendi). ffmpeg kaynağı
 açamazsa video önbellekten atılır, taze çözümlenir ve indirme bir kez yeniden denenir;
-kullanıcı yalnızca birkaç saniye fazla bekler.
+kullanıcı yalnızca birkaç saniye fazla bekler. İstenen akış kaynakta hiç yoksa
+(Instagram sesi olmayan videonun ses bilgisini vermiyor, MP3 seçeneği bu yüzden
+görünür) yeniden denenmez; ffmpeg'in "matches no streams" hatası "Bu videoda ses yok"
+olarak döner.
 
 **Kapak görselleri.** yt-dlp'nin verdiği kapak adresleri doğrulanmamıştır; en öncelikli
 aday (ör. `maxresdefault.webp`) birçok videoda 404 döner. En iyiden kötüye en fazla 6
-aday sırayla denenir, ilk sağlam olan bellekte önbelleğe alınır.
+aday sırayla denenir, ilk sağlam olan bellekte önbelleğe alınır. Büyük kapaklar yalnızca
+yeterince yüksek çözünürlükte yüklenmiş videolarda var; eski ve düşük çözünürlüklü
+videolarda ilk 6 adayın hepsi 404 döner. YouTube'da bu yüzden her videoda bulunan
+`hqdefault.jpg` (480×360) her zaman son yedek olarak denenir.
 
 **Sınırlar.** Canlı yayınlar reddedilir (sonu olmayan akış slotu sonsuza kadar kilitler).
 Boyut sınırı hem tahminle (tahmin yaklaşıksa 1,5× toleransla) hem akış sırasında gerçek
@@ -198,6 +217,13 @@ dosyayı iptal etmesin); çift tıklama tek istek gönderir.
 
 Bu aşamada deploy dosyası yok; taşırken bilinmesi gerekenler:
 
+- **ffmpeg 7.1 veya üstü.** Doğrudan okunan girdilere (Instagram'ın tamamı) verilen
+  `-reconnect_max_retries` 7.1'de geldi; daha eski bir ffmpeg bu seçeneği görünce hiç
+  başlamaz. Ubuntu 24.04'ün paketi 6.1, ffmpeg.org'daki Linux derlemeleri güncel.
+- **iframe'e gömülme.** `/api` başka sitelerden kullanılamaz (bkz. [API](#api)), ama
+  sayfanın kendisi başka bir siteye iframe ile gömülürse içindeki istekler yine
+  `same-origin` olur. Sayfayı sunan tarafta `Content-Security-Policy: frame-ancestors 'self'`
+  başlığı olmalı.
 - **Tek süreç.** Önbellek, IP sınırları, indirme biletleri ve relay bellekte, süreç
   içinde. `uvicorn --workers 4` ile `prepare` bir sürece, `download` başka bir sürece
   düşer ve bilet bulunamaz. `serve.py` bu yüzden `workers=1` ile başlatır. Tek süreç
