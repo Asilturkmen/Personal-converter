@@ -14,7 +14,6 @@ YouTube ve Instagram videoları için sade, hızlı, kendi bilgisayarında çal�
 ![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS_4-06B6D4?logo=tailwindcss&logoColor=white)
 ![ffmpeg](https://img.shields.io/badge/ffmpeg-007808?logo=ffmpeg&logoColor=white)
-![Lisans: MIT](https://img.shields.io/badge/Lisans-MIT-blue)
 
 </div>
 
